@@ -1,0 +1,17 @@
+{
+  "company_name": "KLIPORA",
+  "startup_budget": 440,
+  "video_limit_per_day": 2,
+  "primary_divisions": [
+    "Media Factory",
+    "Automation Services",
+    "Micro SaaS",
+    "Affiliate Content"
+  ],
+  "core_tools": [
+    "n8n",
+    "WaveSpeed",
+    "Railway",
+    "Ollama"
+  ]
+}
