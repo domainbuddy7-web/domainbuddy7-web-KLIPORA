@@ -21,22 +21,36 @@ import typing as t
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from Infrastructure.redis_client import get_redis_client
-from Command_Center.system_guardian import SystemGuardian
-from Command_Center.workflow_controller import WorkflowController
-from Command_Center.pipeline_monitor import PipelineMonitor
-from Command_Center.company_brain import CompanyBrain
-from Command_Center.event_bus import get_event_bus
+# Defer infra imports so any missing module or config is caught and reported via /health (Railway: set env vars)
+_config_ok = False
+_config_error = ""
+redis = None
+guardian = None
+controller = None
+monitor = None
+brain = None
+event_bus = None
 
+try:
+    from Infrastructure.redis_client import get_redis_client
+    from Command_Center.system_guardian import SystemGuardian
+    from Command_Center.workflow_controller import WorkflowController
+    from Command_Center.pipeline_monitor import PipelineMonitor
+    from Command_Center.company_brain import CompanyBrain
+    from Command_Center.event_bus import get_event_bus
 
-redis = get_redis_client()
-guardian = SystemGuardian(redis=redis)
-controller = WorkflowController(redis=redis)
-monitor = PipelineMonitor()
-brain = CompanyBrain(redis=redis)
-event_bus = get_event_bus()
+    redis = get_redis_client()
+    guardian = SystemGuardian(redis=redis)
+    controller = WorkflowController(redis=redis)
+    monitor = PipelineMonitor()
+    brain = CompanyBrain(redis=redis)
+    event_bus = get_event_bus()
+    _config_ok = True
+except BaseException as e:
+    _config_error = f"{type(e).__name__}: {e}"
 
 
 app = FastAPI(title="KLIPORA Mission Control API", version="0.1.0")
@@ -48,6 +62,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _require_config():
+    if not _config_ok:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "Service not configured",
+                "message": _config_error,
+                "fix": "In Railway → Variables, set UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, N8N_URL (and optionally N8N_API_KEY), then redeploy.",
+            },
+        )
+
+
+@app.middleware("http")
+async def require_config_middleware(request, call_next):
+    if request.url.path in ("/", "/health"):
+        return await call_next(request)
+    if not _config_ok:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Service not configured",
+                "message": _config_error,
+                "fix": "In Railway → Variables, set UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, N8N_URL, then redeploy.",
+            },
+        )
+    return await call_next(request)
 
 
 def _iso_now() -> str:
@@ -408,12 +450,24 @@ def system_diagnostics() -> dict:
     }
 
 
+@app.get("/health")
+def health() -> dict:
+    """Always returns 200 so Railway keeps the service up; shows config status."""
+    return {
+        "status": "ok" if _config_ok else "config_missing",
+        "config_ok": _config_ok,
+        "message": None if _config_ok else _config_error,
+        "fix": None if _config_ok else "Set UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, N8N_URL in Railway Variables, then redeploy.",
+    }
+
+
 @app.get("/")
 def root() -> dict:
     return {
         "service": "KLIPORA Mission Control API",
         "version": "0.1.0",
         "timestamp": _iso_now(),
+        "config_ok": _config_ok,
     }
 
 

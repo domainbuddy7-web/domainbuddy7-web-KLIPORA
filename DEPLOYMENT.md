@@ -27,7 +27,18 @@ The existing **n8n**, **Render Service**, and **Upstash Redis** are already on R
 - **Build**: Railway will detect the `Dockerfile` and build the image.
 - **Start command**: leave default (Dockerfile `CMD` runs the API).
 
-### 1.3 Set environment variables
+### 1.3 Set environment variables (required — app crashes without these)
+
+In Railway → your service → **Variables** tab → **Add Variable** (or **New Variable**). Add these **exactly** (names are case-sensitive):
+
+| Variable | Value (example / where to get it) |
+|----------|-----------------------------------|
+| `UPSTASH_REDIS_REST_URL` | `https://wealthy-hyena-4511.upstash.io` (or your Upstash REST URL from [console.upstash.com](https://console.upstash.com)) |
+| `UPSTASH_REDIS_REST_TOKEN` | Your Upstash REST token (same as `upstash_token` in your local `Infrastructure/config.json`) |
+| `N8N_URL` | `https://n8n-production-2762.up.railway.app` |
+| `N8N_API_KEY` | Your n8n API key (same as `n8n_api_key` in local config, or from n8n Settings → API) |
+
+If **UPSTASH_REDIS_REST_URL** or **UPSTASH_REDIS_REST_TOKEN** is missing, the app will crash with: `Redis config not found. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN`.
 
 In Railway → your service → **Variables**, add:
 
@@ -40,7 +51,21 @@ In Railway → your service → **Variables**, add:
 
 - **PORT** is set by Railway automatically; the Dockerfile uses it.
 
-You can copy `upstash_url` / `upstash_token` from `E:\KLIPORA\Infrastructure\config.json` into `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` (same values).
+**Config reference** — `Infrastructure/config.json` (local) uses these keys. For Railway, use the env vars below (same values as in your local `config.json` where applicable):
+
+| config.json key    | Railway env var             | Required for API |
+|--------------------|-----------------------------|-------------------|
+| `upstash_url`      | `UPSTASH_REDIS_REST_URL`    | Yes               |
+| `upstash_token`    | `UPSTASH_REDIS_REST_TOKEN`  | Yes               |
+| `n8n_url`          | `N8N_URL`                   | Yes               |
+| `n8n_api_key`      | `N8N_API_KEY`               | Yes (workflow/execution APIs) |
+| `wavespeed_api`    | —                           | No (used by n8n) |
+| `groq_api`         | —                           | No (used by n8n) |
+| `telegram_bot`     | —                           | No (used by n8n) |
+| `telegram_chat_id` | —                           | No (used by n8n) |
+| `render_service`   | —                           | No (used by n8n) |
+
+Copy `upstash_url` → `UPSTASH_REDIS_REST_URL`, `upstash_token` → `UPSTASH_REDIS_REST_TOKEN`, `n8n_url` → `N8N_URL`, `n8n_api_key` → `N8N_API_KEY` from your local `config.json`.
 
 ### 1.4 Deploy and get URL
 
