@@ -1,0 +1,346 @@
+{
+  "name": "Klipora WF-VIDEO — 5-Scene Video & Voice Generation V2",
+  "nodes": [
+    {
+      "id": "vid-1",
+      "name": "Queue Poller",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 2 }] }
+      }
+    },
+    {
+      "id": "vid-check1",
+      "name": "Check Time Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300],
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst localHour = (now.getUTCHours() + 4) % 24;\nconst localDate = new Date(now.getTime() + 4 * 60 * 60 * 1000);\nconst dateKey = localDate.toISOString().split('T')[0];\nconst inTimeWindow = localHour >= 12 && localHour < 20;\nreturn [{ json: { localHour, dateKey, inTimeWindow } }];"
+      }
+    },
+    {
+      "id": "vid-check2",
+      "name": "GET Daily Count",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [600, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "https://wealthy-hyena-4511.upstash.io/get/system:daily_count:{{ $json.dateKey }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "vid-check3",
+      "name": "Evaluate Limits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300],
+      "parameters": {
+        "jsCode": "const timeData = $('Check Time Window').item.json;\nconst countResult = $json.result;\nconst count = (countResult !== null && countResult !== undefined) ? parseInt(countResult) : 0;\nconst okToGenerate = timeData.inTimeWindow && count < 2;\nreturn [{ json: { localHour: timeData.localHour, dateKey: timeData.dateKey, dailyCount: count, inTimeWindow: timeData.inTimeWindow, okToGenerate } }];"
+      }
+    },
+    {
+      "id": "vid-check4",
+      "name": "IF OK to Generate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json.okToGenerate }}", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "vid-2",
+      "name": "RPOP script_queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/rpop/script_queue",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "vid-2b",
+      "name": "IF Queue Not Empty",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1400, 300],
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.result }}", "operation": "isNotEmpty" }]
+        }
+      }
+    },
+    {
+      "id": "vid-3",
+      "name": "Load Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1600, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "https://wealthy-hyena-4511.upstash.io/get/job:{{ $json.result }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "vid-3b",
+      "name": "IF Job Data Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1800, 300],
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.result }}", "operation": "isNotEmpty" }]
+        }
+      }
+    },
+    {
+      "id": "vid-3c",
+      "name": "Decode Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.result;\nlet job;\ntry { job = JSON.parse(decodeURIComponent(raw)); } catch(e) { throw new Error('Decode failed: ' + e.message); }\nconst sizeMap = { '9x16':'480*848', '16x9':'848*480', '1x1':'480*480' };\nconst size = sizeMap[job.aspect_ratio] || '480*848';\nconst scenes = (job.script && job.script.scenes) ? job.script.scenes : [];\nreturn [{ json: { ...job, videoSize: size, scenes } }];"
+      }
+    },
+    {
+      "id": "vid-s1",
+      "name": "Submit Scene 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2200, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wavespeed.ai/api/v3/wavespeed-ai/wan-2.2/t2v-480p-ultra-fast",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"prompt\": \"{{ $('Decode Job').item.json.scenes[0].visual_prompt }}, {{ $('Decode Job').item.json.visualPrompt }}, vertical video format\",\n  \"negative_prompt\": \"text, watermark, logo, blurry, cartoon\",\n  \"size\": \"{{ $('Decode Job').item.json.videoSize }}\",\n  \"duration\": {{ $('Decode Job').item.json.scenes[0].duration_sec || 7 }},\n  \"seed\": -1,\n  \"enable_safety_checker\": false\n}"
+      }
+    },
+    {
+      "id": "vid-s2",
+      "name": "Submit Scene 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2200, 220],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wavespeed.ai/api/v3/wavespeed-ai/wan-2.2/t2v-480p-ultra-fast",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"prompt\": \"{{ $('Decode Job').item.json.scenes[1].visual_prompt }}, {{ $('Decode Job').item.json.visualPrompt }}, vertical video format\",\n  \"negative_prompt\": \"text, watermark, logo, blurry, cartoon\",\n  \"size\": \"{{ $('Decode Job').item.json.videoSize }}\",\n  \"duration\": {{ $('Decode Job').item.json.scenes[1].duration_sec || 7 }},\n  \"seed\": -1,\n  \"enable_safety_checker\": false\n}"
+      }
+    },
+    {
+      "id": "vid-s3",
+      "name": "Submit Scene 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2200, 340],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wavespeed.ai/api/v3/wavespeed-ai/wan-2.2/t2v-480p-ultra-fast",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"prompt\": \"{{ $('Decode Job').item.json.scenes[2].visual_prompt }}, {{ $('Decode Job').item.json.visualPrompt }}, vertical video format\",\n  \"negative_prompt\": \"text, watermark, logo, blurry, cartoon\",\n  \"size\": \"{{ $('Decode Job').item.json.videoSize }}\",\n  \"duration\": {{ $('Decode Job').item.json.scenes[2].duration_sec || 7 }},\n  \"seed\": -1,\n  \"enable_safety_checker\": false\n}"
+      }
+    },
+    {
+      "id": "vid-s4",
+      "name": "Submit Scene 4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2200, 460],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wavespeed.ai/api/v3/wavespeed-ai/wan-2.2/t2v-480p-ultra-fast",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"prompt\": \"{{ $('Decode Job').item.json.scenes[3].visual_prompt }}, {{ $('Decode Job').item.json.visualPrompt }}, vertical video format\",\n  \"negative_prompt\": \"text, watermark, logo, blurry, cartoon\",\n  \"size\": \"{{ $('Decode Job').item.json.videoSize }}\",\n  \"duration\": {{ $('Decode Job').item.json.scenes[3].duration_sec || 7 }},\n  \"seed\": -1,\n  \"enable_safety_checker\": false\n}"
+      }
+    },
+    {
+      "id": "vid-s5",
+      "name": "Submit Scene 5",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2200, 580],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wavespeed.ai/api/v3/wavespeed-ai/wan-2.2/t2v-480p-ultra-fast",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"prompt\": \"{{ $('Decode Job').item.json.scenes[4].visual_prompt }}, {{ $('Decode Job').item.json.visualPrompt }}, vertical video format\",\n  \"negative_prompt\": \"text, watermark, logo, blurry, cartoon\",\n  \"size\": \"{{ $('Decode Job').item.json.videoSize }}\",\n  \"duration\": {{ $('Decode Job').item.json.scenes[4].duration_sec || 7 }},\n  \"seed\": -1,\n  \"enable_safety_checker\": false\n}"
+      }
+    },
+    {
+      "id": "vid-voice",
+      "name": "Submit Voice Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2200, 700],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wavespeed.ai/api/v3/wavespeed-ai/qwen3-tts/text-to-speech",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"text\": \"{{ $('Decode Job').item.json.script.full_narration }}\",\n  \"language\": \"en\",\n  \"voice\": \"Chelsie\",\n  \"style_instruction\": \"{{ $('Decode Job').item.json.narrationInstr }}\"\n}"
+      }
+    },
+    {
+      "id": "vid-6",
+      "name": "Build Render Package",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 400],
+      "parameters": {
+        "jsCode": "const job = $('Decode Job').item.json;\nconst s1 = $('Submit Scene 1').item.json;\nconst s2 = $('Submit Scene 2').item.json;\nconst s3 = $('Submit Scene 3').item.json;\nconst s4 = $('Submit Scene 4').item.json;\nconst s5 = $('Submit Scene 5').item.json;\nconst vo = $('Submit Voice Job').item.json;\n\nconst pkg = {\n  job_id: job.jobId,\n  selectedTopic: job.selectedTopic || job.script?.title,\n  title: job.script?.title || job.selectedTopic,\n  genre: job.genre,\n  aspect_ratio: job.aspect_ratio,\n  duration: job.duration,\n  chatId: job.chatId,\n  narration: job.script?.full_narration,\n  scene_pred_ids: [\n    s1.data?.id || null,\n    s2.data?.id || null,\n    s3.data?.id || null,\n    s4.data?.id || null,\n    s5.data?.id || null\n  ],\n  voice_pred_id: vo.data?.id || null,\n  vstyle: job.vstyle,\n  nstyle: job.nstyle,\n  created_at: new Date().toISOString(),\n  poll_attempts: 0\n};\nreturn [{ json: pkg }];"
+      }
+    },
+    {
+      "id": "vid-7",
+      "name": "Push to render_queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2650, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/lpush/render_queue/{{ encodeURIComponent(JSON.stringify($json)) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "vid-incr",
+      "name": "INCR Daily Count",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2850, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/incr/system:daily_count:{{ $('Evaluate Limits').item.json.dateKey }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "vid-expire",
+      "name": "Set Count Expiry 24h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [3050, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/expire/system:daily_count:{{ $('Evaluate Limits').item.json.dateKey }}/86400",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Queue Poller": { "main": [[{ "node": "Check Time Window", "type": "main", "index": 0 }]] },
+    "Check Time Window": { "main": [[{ "node": "GET Daily Count", "type": "main", "index": 0 }]] },
+    "GET Daily Count": { "main": [[{ "node": "Evaluate Limits", "type": "main", "index": 0 }]] },
+    "Evaluate Limits": { "main": [[{ "node": "IF OK to Generate", "type": "main", "index": 0 }]] },
+    "IF OK to Generate": { "main": [[{ "node": "RPOP script_queue", "type": "main", "index": 0 }]] },
+    "RPOP script_queue": { "main": [[{ "node": "IF Queue Not Empty", "type": "main", "index": 0 }]] },
+    "IF Queue Not Empty": { "main": [[{ "node": "Load Job", "type": "main", "index": 0 }]] },
+    "Load Job": { "main": [[{ "node": "IF Job Data Exists", "type": "main", "index": 0 }]] },
+    "IF Job Data Exists": { "main": [[{ "node": "Decode Job", "type": "main", "index": 0 }]] },
+    "Decode Job": {
+      "main": [[
+        { "node": "Submit Scene 1", "type": "main", "index": 0 },
+        { "node": "Submit Scene 2", "type": "main", "index": 0 },
+        { "node": "Submit Scene 3", "type": "main", "index": 0 },
+        { "node": "Submit Scene 4", "type": "main", "index": 0 },
+        { "node": "Submit Scene 5", "type": "main", "index": 0 },
+        { "node": "Submit Voice Job", "type": "main", "index": 0 }
+      ]]
+    },
+    "Submit Scene 1": { "main": [[{ "node": "Build Render Package", "type": "main", "index": 0 }]] },
+    "Submit Scene 2": { "main": [[{ "node": "Build Render Package", "type": "main", "index": 0 }]] },
+    "Submit Scene 3": { "main": [[{ "node": "Build Render Package", "type": "main", "index": 0 }]] },
+    "Submit Scene 4": { "main": [[{ "node": "Build Render Package", "type": "main", "index": 0 }]] },
+    "Submit Scene 5": { "main": [[{ "node": "Build Render Package", "type": "main", "index": 0 }]] },
+    "Submit Voice Job": { "main": [[{ "node": "Build Render Package", "type": "main", "index": 0 }]] },
+    "Build Render Package": { "main": [[{ "node": "Push to render_queue", "type": "main", "index": 0 }]] },
+    "Push to render_queue": { "main": [[{ "node": "INCR Daily Count", "type": "main", "index": 0 }]] },
+    "INCR Daily Count": { "main": [[{ "node": "Set Count Expiry 24h", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "klipora" }]
+}

@@ -1,0 +1,11 @@
+{
+  "n8n_url": "https://your-n8n-instance.up.railway.app",
+  "n8n_api_key": "your-n8n-api-key-if-using-api",
+  "wavespeed_api": "your-wavespeed-api-key",
+  "upstash_url": "https://your-redis.upstash.io",
+  "upstash_token": "your-upstash-token",
+  "groq_api": "your-groq-api-key",
+  "telegram_bot": "your-telegram-bot-token",
+  "telegram_chat_id": "your-telegram-chat-id",
+  "render_service": "https://your-render-service.up.railway.app"
+}

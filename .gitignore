@@ -1,0 +1,17 @@
+# Secrets — never commit real keys
+Infrastructure/config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.venv/
+venv/
+env/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

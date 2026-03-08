@@ -1,0 +1,287 @@
+{
+  "name": "Klipora WF-ASSEMBLE — Assembly & Publishing V2",
+  "nodes": [
+    {
+      "id": "asm-1",
+      "name": "Assembly Poller",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 3 }] }
+      }
+    },
+    {
+      "id": "asm-2",
+      "name": "RPOP render_queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [400, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/rpop/render_queue",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "asm-2b",
+      "name": "IF Render Queue Not Empty",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [600, 300],
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.result }}", "operation": "isNotEmpty" }]
+        }
+      }
+    },
+    {
+      "id": "asm-3",
+      "name": "Decode Render Package",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.result;\nlet pkg;\ntry { pkg = JSON.parse(decodeURIComponent(raw)); } catch(e) { throw new Error('Decode failed: ' + e.message); }\nreturn [{ json: pkg }];"
+      }
+    },
+    {
+      "id": "asm-4",
+      "name": "Poll All Scenes Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300],
+      "parameters": {
+        "jsCode": "// This node builds poll URLs for all 5 scenes\nconst pkg = $input.first().json;\nreturn [{ json: {\n  ...pkg,\n  poll_url_s1: 'https://api.wavespeed.ai/api/v3/predictions/' + (pkg.scene_pred_ids[0]||''),\n  poll_url_s2: 'https://api.wavespeed.ai/api/v3/predictions/' + (pkg.scene_pred_ids[1]||''),\n  poll_url_s3: 'https://api.wavespeed.ai/api/v3/predictions/' + (pkg.scene_pred_ids[2]||''),\n  poll_url_s4: 'https://api.wavespeed.ai/api/v3/predictions/' + (pkg.scene_pred_ids[3]||''),\n  poll_url_s5: 'https://api.wavespeed.ai/api/v3/predictions/' + (pkg.scene_pred_ids[4]||''),\n  poll_url_voice: 'https://api.wavespeed.ai/api/v3/predictions/' + (pkg.voice_pred_id||'')\n} }];"
+      }
+    },
+    {
+      "id": "asm-ps1",
+      "name": "Poll Scene 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 100],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.poll_url_s1 }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" }]
+        }
+      }
+    },
+    {
+      "id": "asm-ps2",
+      "name": "Poll Scene 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 220],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Poll All Scenes Status').item.json.poll_url_s2 }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" }]
+        }
+      }
+    },
+    {
+      "id": "asm-ps3",
+      "name": "Poll Scene 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 340],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Poll All Scenes Status').item.json.poll_url_s3 }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" }]
+        }
+      }
+    },
+    {
+      "id": "asm-ps4",
+      "name": "Poll Scene 4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 460],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Poll All Scenes Status').item.json.poll_url_s4 }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" }]
+        }
+      }
+    },
+    {
+      "id": "asm-ps5",
+      "name": "Poll Scene 5",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 580],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Poll All Scenes Status').item.json.poll_url_s5 }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" }]
+        }
+      }
+    },
+    {
+      "id": "asm-pv",
+      "name": "Poll Voice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 700],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Poll All Scenes Status').item.json.poll_url_voice }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer 7b7eb45a4a6b3b88f137789db8cff7020e250e47938a8dddcb50d549fc177afc" }]
+        }
+      }
+    },
+    {
+      "id": "asm-6",
+      "name": "Check All Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 400],
+      "parameters": {
+        "jsCode": "const pkg = $('Poll All Scenes Status').item.json;\n\nfunction isDone(resp) {\n  return resp.data?.status === 'completed' || resp.status === 'completed';\n}\nfunction getUrl(resp) {\n  return resp.data?.outputs?.[0] || resp.outputs?.[0] || null;\n}\n\nconst s1 = $('Poll Scene 1').item.json;\nconst s2 = $('Poll Scene 2').item.json;\nconst s3 = $('Poll Scene 3').item.json;\nconst s4 = $('Poll Scene 4').item.json;\nconst s5 = $('Poll Scene 5').item.json;\nconst vo = $('Poll Voice').item.json;\n\nconst allDone = isDone(s1) && isDone(s2) && isDone(s3) && isDone(s4) && isDone(s5) && isDone(vo);\n\nconst clip_urls = [\n  getUrl(s1), getUrl(s2), getUrl(s3), getUrl(s4), getUrl(s5)\n].filter(Boolean);\n\nconst voice_url = getUrl(vo);\n\nreturn [{ json: {\n  ...pkg,\n  all_complete: allDone,\n  clip_urls,\n  voice_url,\n  clips_ready: clip_urls.length,\n  poll_attempts: (pkg.poll_attempts || 0) + 1\n} }];"
+      }
+    },
+    {
+      "id": "asm-6b",
+      "name": "IF All Complete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1650, 400],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json.all_complete }}", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "asm-requeue",
+      "name": "Re-queue or Abandon",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 560],
+      "parameters": {
+        "jsCode": "const pkg = $input.first().json;\nif (pkg.poll_attempts >= 15) {\n  return [{ json: { ...pkg, abandoned: true, reason: 'max_polls_exceeded_after_15_attempts' } }];\n}\nreturn [{ json: pkg }];"
+      }
+    },
+    {
+      "id": "asm-repush",
+      "name": "Re-push to render_queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2050, 560],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/lpush/render_queue/{{ encodeURIComponent(JSON.stringify($json)) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "asm-render",
+      "name": "Call Railway Render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1850, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.RAILWAY_RENDER_URL || 'https://klipora-render-service-production.up.railway.app' }}/render",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"clips\": {{ JSON.stringify($json.clip_urls) }},\n  \"voiceover\": \"{{ $json.voice_url }}\",\n  \"chatId\": \"{{ $json.chatId }}\",\n  \"botToken\": \"8187477791:AAHnYiq_zz5JCEnQeruW5Xt92ehl8xr2lbQ\",\n  \"jobId\": \"{{ $json.job_id }}\",\n  \"title\": \"{{ $json.selectedTopic || $json.title }}\",\n  \"genre\": \"{{ $json.genre }}\"\n}"
+      }
+    },
+    {
+      "id": "asm-analytics",
+      "name": "Update Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2050, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/incr/analytics:total_videos",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "asm-log",
+      "name": "Log to Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2250, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot8187477791:AAHnYiq_zz5JCEnQeruW5Xt92ehl8xr2lbQ/sendMessage",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "chat_id", "value": "={{ $('Check All Complete').item.json.chatId }}" },
+            { "name": "parse_mode", "value": "Markdown" },
+            { "name": "text", "value": "🎬 *Render Dispatched to FFmpeg!*\n\n📌 *{{ $('Check All Complete').item.json.selectedTopic || $('Check All Complete').item.json.title }}*\n🎭 Genre: {{ $('Check All Complete').item.json.genre }}\n🎬 Scenes: {{ $('Check All Complete').item.json.clips_ready }}/5\n📊 Total videos made: {{ $('Update Analytics').item.json.result }}\n\n⏳ FFmpeg assembling clips + voiceover...\n📹 Video will arrive in Telegram shortly!" }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Assembly Poller": { "main": [[{ "node": "RPOP render_queue", "type": "main", "index": 0 }]] },
+    "RPOP render_queue": { "main": [[{ "node": "IF Render Queue Not Empty", "type": "main", "index": 0 }]] },
+    "IF Render Queue Not Empty": { "main": [[{ "node": "Decode Render Package", "type": "main", "index": 0 }]] },
+    "Decode Render Package": { "main": [[{ "node": "Poll All Scenes Status", "type": "main", "index": 0 }]] },
+    "Poll All Scenes Status": {
+      "main": [[
+        { "node": "Poll Scene 1", "type": "main", "index": 0 },
+        { "node": "Poll Scene 2", "type": "main", "index": 0 },
+        { "node": "Poll Scene 3", "type": "main", "index": 0 },
+        { "node": "Poll Scene 4", "type": "main", "index": 0 },
+        { "node": "Poll Scene 5", "type": "main", "index": 0 },
+        { "node": "Poll Voice", "type": "main", "index": 0 }
+      ]]
+    },
+    "Poll Scene 1": { "main": [[{ "node": "Check All Complete", "type": "main", "index": 0 }]] },
+    "Poll Scene 2": { "main": [[{ "node": "Check All Complete", "type": "main", "index": 0 }]] },
+    "Poll Scene 3": { "main": [[{ "node": "Check All Complete", "type": "main", "index": 0 }]] },
+    "Poll Scene 4": { "main": [[{ "node": "Check All Complete", "type": "main", "index": 0 }]] },
+    "Poll Scene 5": { "main": [[{ "node": "Check All Complete", "type": "main", "index": 0 }]] },
+    "Poll Voice": { "main": [[{ "node": "Check All Complete", "type": "main", "index": 0 }]] },
+    "Check All Complete": { "main": [[{ "node": "IF All Complete", "type": "main", "index": 0 }]] },
+    "IF All Complete": {
+      "main": [
+        [{ "node": "Call Railway Render", "type": "main", "index": 0 }],
+        [{ "node": "Re-queue or Abandon", "type": "main", "index": 0 }]
+      ]
+    },
+    "Re-queue or Abandon": { "main": [[{ "node": "Re-push to render_queue", "type": "main", "index": 0 }]] },
+    "Call Railway Render": { "main": [[{ "node": "Update Analytics", "type": "main", "index": 0 }]] },
+    "Update Analytics": { "main": [[{ "node": "Log to Telegram", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "klipora" }]
+}

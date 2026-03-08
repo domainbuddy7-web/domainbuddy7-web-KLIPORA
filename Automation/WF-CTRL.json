@@ -1,0 +1,219 @@
+{
+  "name": "Klipora WF-CTRL — Telegram Command Center V2",
+  "nodes": [
+    {
+      "id": "ctrl-1",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [100, 400],
+      "credentials": {
+        "telegramApi": { "id": "kKpmr3KxLmzHwWka", "name": "Telegram account" }
+      },
+      "parameters": {
+        "updates": ["message", "callback_query"]
+      }
+    },
+    {
+      "id": "ctrl-2",
+      "name": "Parse Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 400],
+      "parameters": {
+        "jsCode": "const u = $input.first().json;\nconst isCallback = !!u.callback_query;\nconst chatId = String(isCallback ? u.callback_query.message.chat.id : (u.message?.chat?.id || ''));\nconst callbackId = isCallback ? u.callback_query.id : null;\nconst callbackData = isCallback ? u.callback_query.data : null;\nconst messageText = !isCallback ? (u.message?.text || '') : '';\nconst command = (callbackData || messageText).trim();\nreturn [{ json: { chatId, isCallback, callbackId, callbackData, messageText, command } }];"
+      }
+    },
+    {
+      "id": "ctrl-3",
+      "name": "Load Wizard State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 400],
+      "parameters": {
+        "method": "GET",
+        "url": "https://wealthy-hyena-4511.upstash.io/get/wizard:{{ $json.chatId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-4",
+      "name": "Handle Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 400],
+      "parameters": {
+        "jsCode": "const parsed = $('Parse Update').item.json;\nconst { chatId, isCallback, callbackId, command } = parsed;\nconst stateRaw = $('Load Wizard State').item.json.result;\nlet state = {};\ntry { state = stateRaw ? JSON.parse(decodeURIComponent(stateRaw)) : {}; } catch(e) { state = {}; }\nconst genres = ['Mystery','Horror','Space','Ancient Civilizations','Conspiracies','Psychology','Science Mysteries','Hidden History','Wealth & Power','Future & Technology'];\nconst vstyleMap = { dark_cinematic:'🎬 Dark Cinematic', bright_vivid:'☀️ Bright Vivid', foggy_mystery:'🌫️ Foggy Mystery', high_energy:'⚡ High Energy', epic_historical:'🏛️ Epic Historical', colorful:'🌈 Colorful' };\nconst nstyleMap = { dramatic:'🎭 Dramatic', calm_deep:'🌊 Calm Deep', high_energy:'⚡ High Energy', mysterious:'🌙 Mysterious', documentary:'📽️ Documentary' };\nlet text = '';\nlet keyboard = null;\nlet newState = null;\nlet triggerGenerate = false;\nlet generatePayload = null;\nlet isPause = false;\nlet isResume = false;\nconst cmd = command.toLowerCase().replace(/^\\//, '');\nif (cmd === 'start' || cmd === 'menu_main' || cmd === 'menu') {\n  newState = {};\n  text = '🎬 *KLIPORA AI VIDEO FACTORY*\\n\\nYour Autonomous AI Content Empire is online.\\nChoose an option:';\n  keyboard = { inline_keyboard: [\n    [{ text:'🎬 Generate Video', callback_data:'menu_generate' }, { text:'🎭 Genre Library', callback_data:'menu_genres' }],\n    [{ text:'🔥 Trending Topics', callback_data:'menu_trending' }, { text:'🎨 Visual Style', callback_data:'menu_vstyles' }],\n    [{ text:'🎙 Narration Style', callback_data:'menu_nstyles' }, { text:'📊 Command Center', callback_data:'menu_status' }],\n    [{ text:'⚙️ Settings', callback_data:'menu_settings' }, { text:'⏸ Pause System', callback_data:'action_pause' }]\n  ] };\n} else if (cmd === 'menu_generate') {\n  newState = { step:'genre' };\n  text = '🎭 *SELECT GENRE*\\n\\nChoose the content genre for your video:';\n  const rows = [];\n  for (let i = 0; i < genres.length; i += 2) {\n    const row = [{ text: genres[i], callback_data:'genre_'+i }];\n    if (genres[i+1]) row.push({ text: genres[i+1], callback_data:'genre_'+(i+1) });\n    rows.push(row);\n  }\n  rows.push([{ text:'🔀 Random', callback_data:'genre_random' }, { text:'◀️ Back', callback_data:'menu_main' }]);\n  keyboard = { inline_keyboard: rows };\n} else if (cmd.startsWith('genre_')) {\n  const idx = cmd.replace('genre_','');\n  const selectedGenre = idx === 'random' ? genres[Math.floor(Math.random()*genres.length)] : (genres[parseInt(idx)] || 'Mystery');\n  newState = { ...state, step:'vstyle', genre: selectedGenre };\n  text = '🎨 *SELECT VISUAL STYLE*\\n\\nGenre: *' + selectedGenre + '*\\n\\nHow should your video look?';\n  keyboard = { inline_keyboard: [\n    [{ text:'🎬 Dark Cinematic', callback_data:'vstyle_dark_cinematic' }],\n    [{ text:'☀️ Bright Vivid', callback_data:'vstyle_bright_vivid' }],\n    [{ text:'🌫️ Foggy Mystery', callback_data:'vstyle_foggy_mystery' }],\n    [{ text:'⚡ High Energy', callback_data:'vstyle_high_energy' }],\n    [{ text:'🏛️ Epic Historical', callback_data:'vstyle_epic_historical' }],\n    [{ text:'🌈 Colorful', callback_data:'vstyle_colorful' }],\n    [{ text:'◀️ Back', callback_data:'menu_generate' }]\n  ] };\n} else if (cmd.startsWith('vstyle_')) {\n  const vstyle = cmd.replace('vstyle_','');\n  newState = { ...state, step:'nstyle', vstyle };\n  text = '🎙 *SELECT NARRATION STYLE*\\n\\nGenre: *' + (state.genre||newState.genre||'') + '*\\nStyle: *' + (vstyleMap[vstyle]||vstyle) + '*\\n\\nHow should the narrator sound?';\n  keyboard = { inline_keyboard: [\n    [{ text:'🎭 Dramatic', callback_data:'nstyle_dramatic' }],\n    [{ text:'🌊 Calm & Deep', callback_data:'nstyle_calm_deep' }],\n    [{ text:'⚡ High Energy', callback_data:'nstyle_high_energy' }],\n    [{ text:'🌙 Mysterious', callback_data:'nstyle_mysterious' }],\n    [{ text:'📽️ Documentary', callback_data:'nstyle_documentary' }],\n    [{ text:'◀️ Back', callback_data:'menu_generate' }]\n  ] };\n} else if (cmd.startsWith('nstyle_')) {\n  const nstyle = cmd.replace('nstyle_','');\n  newState = { ...state, step:'duration', nstyle };\n  text = '⏱️ *SELECT DURATION*\\n\\nGenre: *' + (state.genre||'') + '*\\nVisual: *' + (vstyleMap[state.vstyle]||'') + '*\\nVoice: *' + (nstyleMap[nstyle]||nstyle) + '*\\n\\nHow long should the video be?';\n  keyboard = { inline_keyboard: [\n    [{ text:'⚡ 20 sec (Fast)', callback_data:'duration_20' }, { text:'🎬 30 sec', callback_data:'duration_30' }],\n    [{ text:'📽️ 40 sec', callback_data:'duration_40' }, { text:'🎥 50 sec (Full)', callback_data:'duration_50' }],\n    [{ text:'◀️ Back', callback_data:'menu_generate' }]\n  ] };\n} else if (cmd.startsWith('duration_')) {\n  const dur = parseInt(cmd.replace('duration_',''));\n  newState = { ...state, step:'aspect', duration: dur };\n  text = '📐 *SELECT ASPECT RATIO*\\n\\nGenre: *' + (state.genre||'') + '*\\nDuration: *' + dur + 's*\\n\\nChoose your video format:';\n  keyboard = { inline_keyboard: [\n    [{ text:'📱 9:16 — Shorts & TikTok (Recommended)', callback_data:'aspect_9x16' }],\n    [{ text:'🖥️ 16:9 — YouTube Landscape', callback_data:'aspect_16x9' }],\n    [{ text:'⬛ 1:1 — Instagram Square', callback_data:'aspect_1x1' }],\n    [{ text:'◀️ Back', callback_data:'menu_generate' }]\n  ] };\n} else if (cmd.startsWith('aspect_')) {\n  const aspect = cmd.replace('aspect_','');\n  newState = { ...state, step:'confirm', aspect_ratio: aspect };\n  text = '✅ *CONFIRM VIDEO GENERATION*\\n\\n🎭 Genre: *' + (state.genre||'') + '*\\n🎨 Visual: *' + (vstyleMap[state.vstyle]||'') + '*\\n🎙 Voice: *' + (nstyleMap[state.nstyle]||'') + '*\\n⏱️ Duration: *' + (state.duration||30) + 's*\\n📐 Format: *' + aspect.replace('x',':') + '*\\n🎬 Scenes: *5 clips*\\n\\n💰 Cost: ~$0.05\\n\\nReady to generate?';\n  keyboard = { inline_keyboard: [\n    [{ text:'🚀 Generate Now!', callback_data:'action_confirm' }],\n    [{ text:'◀️ Change Settings', callback_data:'menu_generate' }, { text:'🏠 Main Menu', callback_data:'menu_main' }]\n  ] };\n} else if (cmd === 'action_confirm') {\n  const jobId = 'jb_' + Math.random().toString(36).substr(2,8);\n  generatePayload = { genre: state.genre||'Mystery', vstyle: state.vstyle||'dark_cinematic', nstyle: state.nstyle||'dramatic', duration: state.duration||30, aspect_ratio: state.aspect_ratio||'9x16', chat_id: chatId, job_id: jobId };\n  triggerGenerate = true;\n  newState = {};\n  text = '🚀 *GENERATION STARTED!*\\n\\n🎭 Genre: *' + (state.genre||'Mystery') + '*\\n🎨 Visual: *' + (vstyleMap[state.vstyle]||'') + '*\\n🎙 Voice: *' + (nstyleMap[state.nstyle]||'') + '*\\n⏱️ Duration: *' + (state.duration||30) + 's*\\n📐 Format: *' + (state.aspect_ratio||'9x16').replace('x',':') + '*\\n\\n⏳ Selecting unique topic...\\n📝 Generating 5-scene script...\\n🎬 Rendering with WaveSpeed AI...\\n\\nYou will be notified when ready! (~3-5 min)';\n  keyboard = { inline_keyboard: [[{ text:'📊 View Status', callback_data:'menu_status' }, { text:'🏠 Main Menu', callback_data:'menu_main' }]] };\n} else if (cmd === 'menu_status' || cmd === 'status') {\n  text = '📊 *AI VIDEO FACTORY — COMMAND CENTER*\\n\\n━━━━━━━━━━━━━━━━━━━━\\n📹 Daily Limit: 2 videos/day\\n⏰ Active Hours: 12:00–20:00 UAE\\n💰 WaveSpeed Credits: $2.50\\n━━━━━━━━━━━━━━━━━━━━\\n\\n*API Status*\\n• WaveSpeed AI: ✅ Active\\n• Groq LLM: ✅ Active\\n• Redis Cache: ✅ Active\\n• FFmpeg Render: ✅ Railway\\n\\n*Topic Database*\\n• 250 unique topics loaded\\n• 10 genres available\\n• Anti-repeat: ✅ Active\\n━━━━━━━━━━━━━━━━━━━━';\n  keyboard = { inline_keyboard: [\n    [{ text:'🔄 Refresh', callback_data:'menu_status' }, { text:'🎬 Generate', callback_data:'menu_generate' }],\n    [{ text:'⏸ Pause System', callback_data:'action_pause' }, { text:'▶️ Resume', callback_data:'action_resume' }],\n    [{ text:'🏠 Main Menu', callback_data:'menu_main' }]\n  ] };\n} else if (cmd === 'action_pause' || cmd === 'pause') {\n  isPause = true;\n  newState = {};\n  text = '⏸ *SYSTEM PAUSED*\\n\\nAll video generation has been stopped.\\nWaveSpeed API will not be called.\\n\\nSend /resume or tap Resume to continue.';\n  keyboard = { inline_keyboard: [\n    [{ text:'▶️ Resume System', callback_data:'action_resume' }],\n    [{ text:'🏠 Main Menu', callback_data:'menu_main' }]\n  ] };\n} else if (cmd === 'action_resume' || cmd === 'resume') {\n  isResume = true;\n  newState = {};\n  text = '▶️ *SYSTEM RESUMED*\\n\\nVideo generation is back online.\\nActive hours: 12:00–20:00 UAE.\\nDaily limit: 2 videos.';\n  keyboard = { inline_keyboard: [\n    [{ text:'🎬 Generate Now', callback_data:'menu_generate' }, { text:'📊 Status', callback_data:'menu_status' }],\n    [{ text:'🏠 Main Menu', callback_data:'menu_main' }]\n  ] };\n} else if (cmd === 'menu_genres') {\n  text = '🎭 *GENRE LIBRARY*\\n\\n10 Genres • 250 Unique Topics\\n\\n🔮 Mystery\\n👻 Horror\\n🚀 Space\\n🏛️ Ancient Civilizations\\n🕵️ Conspiracies\\n🧠 Psychology\\n🔬 Science Mysteries\\n📜 Hidden History\\n💰 Wealth & Power\\n🤖 Future & Technology\\n\\nEach genre has 25 unique topic seeds.\\nAnti-repeat system ensures no topic is used twice.';\n  keyboard = { inline_keyboard: [[{ text:'🎬 Start Generating', callback_data:'menu_generate' }, { text:'🏠 Back', callback_data:'menu_main' }]] };\n} else if (cmd === 'menu_vstyles') {\n  text = '🎨 *VISUAL STYLE LIBRARY*\\n\\n━━━━━━━━━━━━━━━━━━━━\\n🎬 *Dark Cinematic*\\n└ Dramatic shadows, noir lighting, high contrast 4K\\n\\n☀️ *Bright Vivid*\\n└ Golden hour, uplifting, sharp details\\n\\n🌫️ *Foggy Mystery*\\n└ Thick fog, eerie atmosphere, muted colors\\n\\n⚡ *High Energy*\\n└ Dynamic motion, neon accents, kinetic\\n\\n🏛️ *Epic Historical*\\n└ Ancient settings, torch lighting, grand scale\\n\\n🌈 *Colorful*\\n└ Vibrant palette, cinematic motion\\n━━━━━━━━━━━━━━━━━━━━';\n  keyboard = { inline_keyboard: [[{ text:'🎬 Generate Video', callback_data:'menu_generate' }, { text:'🏠 Back', callback_data:'menu_main' }]] };\n} else if (cmd === 'menu_nstyles') {\n  text = '🎙 *NARRATION STYLE LIBRARY*\\n\\n━━━━━━━━━━━━━━━━━━━━\\n🎭 *Dramatic*\\n└ Deep commanding, slow deliberate pacing\\n\\n🌊 *Calm & Deep*\\n└ Soothing, measured, authoritative\\n\\n⚡ *High Energy*\\n└ Enthusiastic, fast-paced, exciting\\n\\n🌙 *Mysterious*\\n└ Hushed whisper, building suspense\\n\\n📽️ *Documentary*\\n└ BBC-style, authoritative, clear\\n━━━━━━━━━━━━━━━━━━━━\\n\\nAll voices: English only (Qwen3 TTS — Chelsie)';\n  keyboard = { inline_keyboard: [[{ text:'🎬 Generate Video', callback_data:'menu_generate' }, { text:'🏠 Back', callback_data:'menu_main' }]] };\n} else if (cmd === 'menu_trending') {\n  text = '🔥 *TRENDING TOPICS*\\n\\nTop performing categories:\\n\\n1. 🔮 Mysterious disappearances\\n2. 🚀 Space anomalies & signals\\n3. 🧠 Dark psychology experiments\\n4. 🏛️ Lost ancient civilizations\\n5. 🕵️ Government secrets revealed\\n6. 👻 Real paranormal evidence\\n7. 💰 Billionaire secret strategies\\n8. 🔬 Deep ocean mysteries\\n9. 📜 Erased history events\\n10. 🤖 AI breakthrough theories\\n\\nSelect any genre in Generate Video to use trending topics.';\n  keyboard = { inline_keyboard: [[{ text:'🎬 Generate Video', callback_data:'menu_generate' }, { text:'🏠 Back', callback_data:'menu_main' }]] };\n} else if (cmd === 'menu_settings') {\n  text = '⚙️ *SYSTEM SETTINGS*\\n\\n━━━━━━━━━━━━━━━━━━━━\\n*Production Configuration*\\n• Videos/day: 2 (max)\\n• Active hours: 12:00–20:00 UAE\\n• Scenes per video: 5\\n• AI Video: WAN 2.2 480p Ultra-Fast\\n• Voice: Qwen3 TTS (Chelsie, English)\\n• Script: Llama 3.3 70B (Groq)\\n• Assembly: FFmpeg on Railway\\n• Topic DB: 250 seeds (anti-repeat)\\n━━━━━━━━━━━━━━━━━━━━';\n  keyboard = { inline_keyboard: [\n    [{ text:'📊 Command Center', callback_data:'menu_status' }],\n    [{ text:'🏠 Main Menu', callback_data:'menu_main' }]\n  ] };\n} else {\n  text = '👋 Welcome to *KLIPORA AI VIDEO FACTORY*\\n\\nUse /start to open the command center.\\n\\nCommands:\\n/start — Main menu\\n/status — System status\\n/pause — Pause generation\\n/resume — Resume generation';\n  keyboard = { inline_keyboard: [[{ text:'🏠 Open Menu', callback_data:'menu_main' }]] };\n}\nreturn [{ json: {\n  chatId, text,\n  keyboard: JSON.stringify(keyboard),\n  newState: newState !== null ? encodeURIComponent(JSON.stringify(newState)) : null,\n  triggerGenerate,\n  generatePayload: generatePayload ? JSON.stringify(generatePayload) : null,\n  isCallback, callbackId, isPause, isResume\n} }];"
+      }
+    },
+    {
+      "id": "ctrl-5",
+      "name": "Save Wizard State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/set/wizard:{{ $('Handle Command').item.json.chatId }}/{{ $('Handle Command').item.json.newState || 'e30%3D' }}/ex/3600",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-6",
+      "name": "IF Is Callback",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 350],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $('Handle Command').item.json.isCallback }}", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-7",
+      "name": "Answer Callback Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot8187477791:AAHnYiq_zz5JCEnQeruW5Xt92ehl8xr2lbQ/answerCallbackQuery",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [{ "name": "callback_query_id", "value": "={{ $('Handle Command').item.json.callbackId }}" }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-8",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot8187477791:AAHnYiq_zz5JCEnQeruW5Xt92ehl8xr2lbQ/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": [{ "name": "Content-Type", "value": "application/json" }],
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"chat_id\": \"{{ $('Handle Command').item.json.chatId }}\",\n  \"text\": \"{{ $('Handle Command').item.json.text }}\",\n  \"parse_mode\": \"Markdown\",\n  \"reply_markup\": {{ $('Handle Command').item.json.keyboard }}\n}"
+      }
+    },
+    {
+      "id": "ctrl-9",
+      "name": "IF Pause Action",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 650],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $('Handle Command').item.json.isPause }}", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-10",
+      "name": "Set System Paused",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 620],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/set/system:paused/true",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-11",
+      "name": "IF Resume Action",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 780],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $('Handle Command').item.json.isResume }}", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-12",
+      "name": "Clear System Paused",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 750],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/del/system:paused",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-13",
+      "name": "IF Trigger Generate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 920],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $('Handle Command').item.json.triggerGenerate }}", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "ctrl-14",
+      "name": "Call WF-GEN",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 920],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-production-2762.up.railway.app/webhook/wf-gen",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $('Handle Command').item.json.generatePayload }}"
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Parse Update", "type": "main", "index": 0 }]] },
+    "Parse Update": { "main": [[{ "node": "Load Wizard State", "type": "main", "index": 0 }]] },
+    "Load Wizard State": { "main": [[{ "node": "Handle Command", "type": "main", "index": 0 }]] },
+    "Handle Command": {
+      "main": [[
+        { "node": "Save Wizard State", "type": "main", "index": 0 },
+        { "node": "IF Is Callback", "type": "main", "index": 0 },
+        { "node": "Send Response", "type": "main", "index": 0 },
+        { "node": "IF Pause Action", "type": "main", "index": 0 },
+        { "node": "IF Resume Action", "type": "main", "index": 0 },
+        { "node": "IF Trigger Generate", "type": "main", "index": 0 }
+      ]]
+    },
+    "IF Is Callback": { "main": [[{ "node": "Answer Callback Query", "type": "main", "index": 0 }]] },
+    "IF Pause Action": { "main": [[{ "node": "Set System Paused", "type": "main", "index": 0 }]] },
+    "IF Resume Action": { "main": [[{ "node": "Clear System Paused", "type": "main", "index": 0 }]] },
+    "IF Trigger Generate": { "main": [[{ "node": "Call WF-GEN", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "klipora" }]
+}

@@ -1,0 +1,13 @@
+KLIPORA SYSTEM REPORT
+Generated: 2026-03-07 22:12:41.087815
+
+Workspace Status:
+
+Agents: 1
+Automation: 0
+Command_Center: 0
+Datasets: 0
+Infrastructure: 0
+Media_Factory: 0
+Projects: 0
+Reports: 0

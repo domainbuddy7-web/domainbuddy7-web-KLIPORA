@@ -1,0 +1,191 @@
+{
+  "name": "Klipora WF-GEN — Content Generation V2",
+  "nodes": [
+    {
+      "id": "gen-1",
+      "name": "Gen Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "parameters": {
+        "path": "wf-gen",
+        "httpMethod": "POST",
+        "responseMode": "onReceived"
+      }
+    },
+    {
+      "id": "gen-2",
+      "name": "Check Paused",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [400, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "https://wealthy-hyena-4511.upstash.io/get/system:paused",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "gen-2b",
+      "name": "IF Not Paused",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [600, 300],
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.result }}", "operation": "notEqual", "value2": "true" }]
+        }
+      }
+    },
+    {
+      "id": "gen-3",
+      "name": "Parse Job Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300],
+      "parameters": {
+        "jsCode": "const body = $('Gen Webhook').item.json.body || $('Gen Webhook').item.json || {};\nconst genre = body.genre || 'Mystery';\nconst vstyle = body.vstyle || 'dark_cinematic';\nconst nstyle = body.nstyle || 'dramatic';\nconst duration = parseInt(body.duration) || 30;\nconst aspect_ratio = body.aspect_ratio || '9x16';\nconst jobId = body.job_id || 'jb_' + Math.random().toString(36).substr(2,8);\nconst chatId = String(body.chat_id || '8232710919');\n\nconst vstylePrompts = {\n  dark_cinematic: 'dark cinematic atmosphere, dramatic shadows, noir lighting, high contrast, 4K film still',\n  bright_vivid: 'bright vivid colors, golden hour lighting, uplifting atmosphere, sharp details, 4K',\n  foggy_mystery: 'thick mysterious fog, eerie atmosphere, muted colors, ghost-like ambiance, cinematic',\n  high_energy: 'dynamic fast movement, electric energy, neon accents, kinetic atmosphere, 4K',\n  epic_historical: 'ancient epic setting, stone architecture, torch lighting, grand scale, cinematic 4K',\n  colorful: 'vibrant colorful visuals, smooth cinematic motion, rich palette, professional 4K'\n};\n\nconst nstyleInstructions = {\n  dramatic: 'Deep commanding dramatic narrator. Slow deliberate pacing. Each word carries weight. English only.',\n  calm_deep: 'Calm soothing deep voice. Measured pace. Reassuring and authoritative. English only.',\n  high_energy: 'High energy enthusiastic narrator. Fast-paced exciting delivery. English only.',\n  mysterious: 'Hushed mysterious whisper quality. Building suspense. English only.',\n  documentary: 'Professional BBC documentary narrator. Authoritative clear diction. English only.'\n};\n\nreturn [{ json: {\n  genre, vstyle, nstyle, duration, aspect_ratio, jobId, chatId,\n  visualPrompt: vstylePrompts[vstyle] || vstylePrompts.dark_cinematic,\n  narrationInstr: nstyleInstructions[nstyle] || nstyleInstructions.dramatic\n} }];"
+      }
+    },
+    {
+      "id": "gen-4",
+      "name": "Get Used Topics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1000, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "https://wealthy-hyena-4511.upstash.io/smembers/used_topics",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "gen-5",
+      "name": "Select Unique Topic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300],
+      "parameters": {
+        "jsCode": "const topicData = {\n  'Mystery': ['The Village Where Everyone Disappeared Overnight','The Signal Scientists Still Can\\'t Decode','The Plane That Vanished Without a Trace','The Locked Room Mystery That Stunned Detectives','The Island That Appears on No Map','The Ancient Message Found in Ice','The Explorer Who Never Returned','The Town That Was Abandoned in One Day','The Photograph That Shouldn\\'t Exist','The Secret Tunnel Beneath the City','The Map That Shows a Lost Civilization','The Diary That Predicted the Future','The Artifact No Scientist Can Explain','The Secret Society Hidden for 200 Years','The Broadcast That Interrupted Radio Worldwide','The Mysterious Lights Seen by Thousands','The Object Found Deep Underground','The Ship Found Empty in the Ocean','The Message From Deep Space','The Case That Still Has No Answer','The Code Hidden in an Ancient Temple','The Scientist Who Disappeared After a Discovery','The File Governments Won\\'t Release','The Secret Experiment That Failed','The City Hidden Beneath the Desert'],\n  'Horror': ['The House Where No One Survived the Night','The Voice Recorded in an Empty Room','The Forest Where People Hear Whispers','The Mirror That Shows Someone Else','The Doll That Moves on Camera','The Abandoned Hospital With Screams at Night','The Ritual That Should Never Be Performed','The Photograph Taken After Death','The Shadow Seen by Thousands','The Village That Believes in a Curse','The EVP Recording That Terrified Investigators','The Hotel Room Guests Refuse to Enter','The Haunted Island No One Visits','The Creature Seen in the Woods','The Dark Legend That Came True','The Grave That Was Found Open','The House That Appears Only at Night','The Painting That Changes Every Year','The Object Found in a Haunted Basement','The Story That Made an Entire Town Leave','The Demon Legend From Ancient Folklore','The Video That Paranormal Experts Can\\'t Explain','The Night When the Ghost Appeared on Camera','The Cave Where Strange Voices Are Heard','The Haunted Lighthouse Mystery'],\n  'Space': ['The Signal NASA Can\\'t Explain','The Planet That Should Not Exist','The Black Hole Bigger Than a Galaxy','The Object Moving Between Stars','The Strange Pattern Found in Space','The Signal That Repeats Every 16 Days','The Star That Suddenly Disappeared','The Planet Made of Diamonds','The Alien Signal That Shocked Scientists','The Mystery of Fast Radio Bursts','The Probe That Never Came Back','The Planet That Rains Glass','The Object That Entered Our Solar System','The Space Phenomenon Seen Only Once','The Satellite That Detected Something Impossible','The Strange Shape Found in Deep Space','The Galaxy That Shouldn\\'t Exist','The Cosmic Explosion That Shocked Astronomers','The Message Hidden in Space Signals','The Planet That Might Have Oceans','The Alien Technology Theory Scientists Debate','The Dark Matter Mystery','The Signal From Beyond the Milky Way','The Interstellar Visitor That Passed Earth','The Strange Lights Seen From Orbit'],\n  'Ancient Civilizations': ['The Lost City Hidden in the Jungle','The Ancient Machine No One Understands','The Map That Shows Atlantis','The Pyramid Older Than History','The Civilization That Disappeared Suddenly','The Ancient Battery That Produced Electricity','The Temple Built With Impossible Precision','The Artifact Found Beneath a Pyramid','The Ancient Script No One Can Read','The City Found Beneath the Ocean','The Underground City That Housed 20000 People','The Stone That Predicts Solar Events','The Civilization That Predicted Astronomy','The Hidden Chamber Beneath the Pyramid','The Artifact That Shouldn\\'t Exist','The Ancient Device That Looks Like a Computer','The Temple Aligned With the Stars','The Lost Library of the Ancient World','The Civilization Lost in the Desert','The Technology Ancient Engineers Used','The Secret Found in an Ancient Tomb','The Map That Shows Antarctica Without Ice','The Mystery of Megalithic Structures','The Lost Civilization Beneath the Sea','The Ancient Code Hidden in Stone'],\n  'Conspiracies': ['The Secret Society That Controls Everything','The Government File That Was Classified for 80 Years','The Hidden Program No One Talks About','The Technology That Was Suppressed','The Billionaire Secret Network','The Secret Meeting That Changed History','The UFO Coverup Story','The Hidden Experiment Conducted in Secret','The Corporate Conspiracy That Shook the World','The Document That Reveals the Truth','The Elite Group Running Global Power','The Secret Weapon Project','The Plan Hidden From the Public','The Intelligence Operation Never Revealed','The Hidden War Between Nations','The Secret Program Behind Space Research','The Data Governments Won\\'t Share','The Technology Invented Then Disappeared','The Network of Hidden Power','The Secret Alliance That Exists Today','The Plan That Manipulated Markets','The Global Strategy Nobody Notices','The Hidden Agenda of Powerful Organizations','The Secret Documents That Leaked Online','The Theory That Refuses to Die'],\n  'Psychology': ['The Experiment That Proved Humans Can Be Manipulated','The Psychological Trick That Controls Decisions','The Study That Changed Behavioral Science','The Dark Psychology Technique','The Mind Experiment That Shocked Scientists','The Bias That Controls Human Thinking','The Reason Humans Follow Authority','The Experiment That Explains Group Behavior','The Science of Fear Response','The Study on Human Memory Errors','The Secret Behind Persuasion','The Psychology Trick Used in Marketing','The Study That Proved People Follow the Crowd','The Dark Side of Human Behavior','The Experiment on Decision Making','The Brain Phenomenon Known as Déjà Vu','The Psychology of Influence','The Study That Revealed Hidden Bias','The Science Behind Motivation','The Brain Illusion That Tricks Everyone','The Psychological Warfare Strategy','The Study on Human Attention','The Experiment on Social Pressure','The Science Behind Habits','The Brain Trick That Controls Memory'],\n  'Science Mysteries': ['The Particle Scientists Can\\'t Explain','The Physics Theory That Might Change Everything','The Organism That Survives Extreme Conditions','The Sound Heard Across the Ocean','The Geological Event That Confused Experts','The Strange Signal Detected in Antarctica','The Creature Found in the Deep Ocean','The Quantum Phenomenon Scientists Debate','The Magnetic Anomaly on Earth','The Ocean Mystery Still Unsolved','The Energy Source Scientists Can\\'t Replicate','The Organism That Shouldn\\'t Exist','The Strange Ice Formation','The Natural Event That Looks Artificial','The Scientific Discovery That Was Ignored','The Deep Sea Creature With Unknown Biology','The Anomaly Detected by Satellites','The Earth Signal That Repeats','The Experiment That Produced Impossible Results','The Unknown Material Found in Nature','The Mystery of Bioluminescent Oceans','The Strange Wave Pattern Detected Globally','The Particle That Should Not Exist','The Geological Structure Scientists Debate','The Science Mystery That Remains Unsolved'],\n  'Hidden History': ['The War That Was Erased From History','The Empire That Disappeared','The Lost Expedition That Never Returned','The King History Forgot','The Secret Treaty Between Nations','The Battle That Changed the World','The Hidden Manuscript Found in a Library','The Forgotten Civilization in the Mountains','The Explorer Who Vanished','The Secret Discovery Hidden for Decades','The Hidden City Beneath Ruins','The Map That Reveals Ancient Trade Routes','The Artifact That Rewrites History','The Ancient Conflict Nobody Talks About','The Secret War Technology','The Hidden Archives Found in Europe','The Kingdom That Disappeared','The Historical Mystery That Remains Unsolved','The Lost Ship of an Ancient Empire','The Forgotten Dynasty','The Secret Letters Between Kings','The Hidden Treasure of an Empire','The Discovery That Changed Archaeology','The Secret Library of Ancient Knowledge','The Map That Shouldn\\'t Exist'],\n  'Wealth & Power': ['The Billionaire Strategy Nobody Understands','The Secret Investment That Created a Fortune','The Hidden Network of Global Power','The Economic Crash Nobody Saw Coming','The Secret of Elite Wealth','The Corporate War Between Tech Giants','The Billionaire Who Predicted the Market','The Strategy Used by Powerful Families','The Hidden System Behind Global Finance','The Investment Strategy of the Ultra Rich','The Secret Banking Network','The Financial Mystery Behind Market Moves','The Billion Dollar Deal That Changed Everything','The Hidden Wealth of Powerful Dynasties','The Strategy Behind Economic Power','The Corporate Secret That Built an Empire','The Billionaire Who Controls Industries','The Financial System Few Understand','The Hidden Power of Private Equity','The Global Money Network','The Strategy Used by Elite Investors','The Economic Game Behind Markets','The Secret Behind Billion Dollar Startups','The Financial Crisis Nobody Expected','The Hidden Fortune Discovered'],\n  'Future & Technology': ['The AI Breakthrough That Could Change Everything','The Technology That Could Replace Smartphones','The Future City Being Built Today','The Robot That Can Think','The Invention That Could Change Energy Forever','The Quantum Computer Breakthrough','The Future Transport System','The Technology That Could Extend Life','The Space Habitat of the Future','The Machine That Can Learn Like Humans','The Future of Brain Interfaces','The Technology That Could End Scarcity','The AI System That Writes Code','The Breakthrough in Nanotechnology','The Energy Technology Scientists Are Developing','The Future of Human Augmentation','The Innovation That Could Change Medicine','The Future of Autonomous Systems','The Technology That Could Colonize Space','The Smart City of Tomorrow','The Next Internet Revolution','The Breakthrough in Artificial Intelligence','The Future of Space Travel','The Invention That Could Change Transportation','The Technology That Could Transform Humanity']\n};\n\nconst params = $('Parse Job Params').item.json;\nconst usedResult = $('Get Used Topics').item.json.result;\nconst usedTopics = Array.isArray(usedResult) ? usedResult : [];\n\nconst genre = params.genre;\nconst genreTopics = topicData[genre] || topicData['Mystery'];\n\n// Filter unused from selected genre\nlet available = genreTopics.filter(t => !usedTopics.includes(t));\n\n// If genre exhausted, pick from all genres\nif (available.length === 0) {\n  const allTopics = Object.values(topicData).flat();\n  available = allTopics.filter(t => !usedTopics.includes(t));\n}\n\n// If everything used (250+ videos!), reset and start again\nif (available.length === 0) { available = genreTopics; }\n\nconst selectedTopic = available[Math.floor(Math.random() * available.length)];\nconst remaining = genreTopics.filter(t => !usedTopics.includes(t) && t !== selectedTopic).length;\n\nreturn [{ json: { ...params, selectedTopic, topicsRemainingInGenre: remaining } }];"
+      }
+    },
+    {
+      "id": "gen-6",
+      "name": "Mark Topic Used",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1400, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/sadd/used_topics/{{ encodeURIComponent($json.selectedTopic) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "gen-7",
+      "name": "Generate Script",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1600, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_GROQ_API_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"max_tokens\": 2000,\n  \"temperature\": 0.9,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a viral short-form video scriptwriter. ALWAYS write in English only. Never use any other language. Write scripts split into exactly 5 cinematic scenes. Return ONLY valid JSON (no markdown, no code blocks) with these exact fields: title (string, viral hook max 12 words), full_narration (string, complete script concatenated), scenes (array of exactly 5 objects each with: scene_number integer 1-5, visual_prompt string for AI video generation 20-40 words, narration string what narrator says 15-30 words, duration_sec integer 6-8). Make it build tension from scene 1 to scene 5.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Topic: {{ $('Select Unique Topic').item.json.selectedTopic }}\\nGenre: {{ $('Select Unique Topic').item.json.genre }}\\nTotal duration: {{ $('Select Unique Topic').item.json.duration }}s (5 scenes)\\nVisual style: {{ $('Select Unique Topic').item.json.visualPrompt }}\\nNarration style: {{ $('Select Unique Topic').item.json.narrationInstr }}\\n\\nWrite a 5-scene viral English script.\"\n    }\n  ]\n}"
+      }
+    },
+    {
+      "id": "gen-8",
+      "name": "Parse Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 300],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices[0].message.content;\nconst params = $('Select Unique Topic').item.json;\nlet script;\ntry {\n  const cleaned = raw.replace(/```json/g,'').replace(/```/g,'').trim();\n  script = JSON.parse(cleaned);\n} catch(e) {\n  script = {\n    title: params.selectedTopic,\n    full_narration: 'What you are about to discover will change everything. The truth has been hidden for decades. Scientists were baffled. The evidence was overwhelming. And now you know why they kept it secret.',\n    scenes: [\n      { scene_number:1, visual_prompt: 'Dramatic dark cinematic opening, mysterious atmosphere, ' + params.visualPrompt, narration: 'What you are about to discover will change everything.', duration_sec:7 },\n      { scene_number:2, visual_prompt: 'Revealing documentary shot, close-up details, ' + params.visualPrompt, narration: params.selectedTopic + '. The truth has been hidden for decades.', duration_sec:7 },\n      { scene_number:3, visual_prompt: 'Tension building, dark shadows, ' + params.visualPrompt, narration: 'Scientists were baffled. No one could explain it.', duration_sec:7 },\n      { scene_number:4, visual_prompt: 'Evidence reveal, dramatic lighting, ' + params.visualPrompt, narration: 'The evidence was overwhelming.', duration_sec:7 },\n      { scene_number:5, visual_prompt: 'Climactic cinematic conclusion, ' + params.visualPrompt, narration: 'And now you know why they kept it secret.', duration_sec:7 }\n    ]\n  };\n}\n// Enforce exactly 5 scenes\nif (!script.scenes) script.scenes = [];\nwhile (script.scenes.length < 5) {\n  script.scenes.push({ scene_number: script.scenes.length+1, visual_prompt: params.visualPrompt + ', cinematic scene', narration: 'The mystery deepens.', duration_sec:7 });\n}\nscript.scenes = script.scenes.slice(0, 5);\n\nreturn [{ json: {\n  script, jobId: params.jobId, chatId: params.chatId,\n  genre: params.genre, vstyle: params.vstyle, nstyle: params.nstyle,\n  duration: params.duration, aspect_ratio: params.aspect_ratio,\n  selectedTopic: params.selectedTopic,\n  visualPrompt: params.visualPrompt, narrationInstr: params.narrationInstr,\n  topicsRemainingInGenre: params.topicsRemainingInGenre\n} }];"
+      }
+    },
+    {
+      "id": "gen-9",
+      "name": "Store Job in Redis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/set/job:{{ $json.jobId }}/{{ encodeURIComponent(JSON.stringify($json)) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "gen-10",
+      "name": "Push to script_queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2200, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/lpush/script_queue/{{ $json.jobId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "gen-11",
+      "name": "Notify Script Ready",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2400, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot8187477791:AAHnYiq_zz5JCEnQeruW5Xt92ehl8xr2lbQ/sendMessage",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "chat_id", "value": "={{ $('Parse Script').item.json.chatId }}" },
+            { "name": "parse_mode", "value": "Markdown" },
+            { "name": "text", "value": "✅ *Script Ready!*\n\n📌 *{{ $('Parse Script').item.json.selectedTopic }}*\n🎭 Genre: {{ $('Parse Script').item.json.genre }}\n🎬 Scenes: 5\n⏱️ Duration: {{ $('Parse Script').item.json.duration }}s\n📊 Topics left in genre: {{ $('Parse Script').item.json.topicsRemainingInGenre }}\n\n🎞️ Rendering video clips now...\n⏳ ~3-5 minutes" }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gen Webhook": { "main": [[{ "node": "Check Paused", "type": "main", "index": 0 }]] },
+    "Check Paused": { "main": [[{ "node": "IF Not Paused", "type": "main", "index": 0 }]] },
+    "IF Not Paused": { "main": [[{ "node": "Parse Job Params", "type": "main", "index": 0 }]] },
+    "Parse Job Params": { "main": [[{ "node": "Get Used Topics", "type": "main", "index": 0 }]] },
+    "Get Used Topics": { "main": [[{ "node": "Select Unique Topic", "type": "main", "index": 0 }]] },
+    "Select Unique Topic": { "main": [[{ "node": "Mark Topic Used", "type": "main", "index": 0 }]] },
+    "Mark Topic Used": { "main": [[{ "node": "Generate Script", "type": "main", "index": 0 }]] },
+    "Generate Script": { "main": [[{ "node": "Parse Script", "type": "main", "index": 0 }]] },
+    "Parse Script": { "main": [[{ "node": "Store Job in Redis", "type": "main", "index": 0 }]] },
+    "Store Job in Redis": { "main": [[{ "node": "Push to script_queue", "type": "main", "index": 0 }]] },
+    "Push to script_queue": { "main": [[{ "node": "Notify Script Ready", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "klipora" }]
+}

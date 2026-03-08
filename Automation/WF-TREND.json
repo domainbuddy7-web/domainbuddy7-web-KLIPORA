@@ -1,0 +1,184 @@
+{
+  "name": "Klipora WF-TREND — Daily Trend Discovery V2",
+  "nodes": [
+    {
+      "id": "tr-1",
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tr-2",
+      "name": "Fetch Reddit Trends",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        400,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.reddit.com/r/todayilearned/hot.json?limit=25",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "KliporaBot/1.0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tr-3",
+      "name": "Analyze Trends",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        600,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GROQ_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"max_tokens\": 300,\n  \"messages\": [\n    { \"role\": \"system\", \"content\": \"Extract top 5 viral English short-form video themes from these Reddit titles. Return ONLY a JSON array of English theme strings.\" },\n    { \"role\": \"user\",   \"content\": \"Titles: {{ $json.data.children.slice(0,10).map(p => p.data.title).join(' | ') }}\" }\n  ]\n}"
+      }
+    },
+    {
+      "id": "tr-4",
+      "name": "Store Trend Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        800,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wealthy-hyena-4511.upstash.io/setex/trend:latest/86400/{{ encodeURIComponent($json.choices[0].message.content) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tr-5",
+      "name": "Send Trend Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot8187477791:AAHnYiq_zz5JCEnQeruW5Xt92ehl8xr2lbQ/sendMessage",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "8232710919"
+            },
+            {
+              "name": "text",
+              "value": "📊 Daily trends loaded. Next video will use today's signals."
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Reddit Trends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Reddit Trends": {
+      "main": [
+        [
+          {
+            "node": "Analyze Trends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Trends": {
+      "main": [
+        [
+          {
+            "node": "Store Trend Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Trend Data": {
+      "main": [
+        [
+          {
+            "node": "Send Trend Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "klipora"
+    }
+  ]
+}
