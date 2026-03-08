@@ -166,7 +166,7 @@
           "parameters": [
             { "name": "chat_id", "value": "={{ $('Parse Script').item.json.chatId }}" },
             { "name": "parse_mode", "value": "Markdown" },
-            { "name": "text", "value": "✅ *Script Ready!*\n\n📌 *{{ $('Parse Script').item.json.selectedTopic }}*\n🎭 Genre: {{ $('Parse Script').item.json.genre }}\n🎬 Scenes: 5\n⏱️ Duration: {{ $('Parse Script').item.json.duration }}s\n📊 Topics left in genre: {{ $('Parse Script').item.json.topicsRemainingInGenre }}\n\n🎞️ Rendering video clips now...\n⏳ ~3-5 minutes" }
+            { "name": "text", "value": "=\"✅ *Script Ready!*\\n\\n📌 *\" + $('Parse Script').item.json.selectedTopic + \"*\\n🎭 Genre: \" + $('Parse Script').item.json.genre + \"\\n🎬 Scenes: 5\\n⏱️ Duration: \" + $('Parse Script').item.json.duration + \"s\\n📊 Topics left in genre: \" + $('Parse Script').item.json.topicsRemainingInGenre + \"\\n\\n🎞️ Rendering video clips now...\\n⏳ ~3-5 minutes\"" }
           ]
         }
       }

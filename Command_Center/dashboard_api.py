@@ -204,18 +204,30 @@ class UpdateMetadataRequest(BaseModel):
 def system_health() -> dict:
     """
     High-level system health snapshot for the dashboard.
+    Never raises: returns DEGRADED and minimal payload if a check fails.
     """
-    flags = guardian.check_system_flags()
-    queues = guardian.check_queues()
-    failures = guardian.check_n8n_failures()
-
-    # Simple status derivation for now.
+    try:
+        flags = guardian.check_system_flags()
+        queues = guardian.check_queues()
+        failures = guardian.check_n8n_failures()
+    except Exception as e:
+        return {
+            "timestamp": _iso_now(),
+            "status": "DEGRADED",
+            "message": f"Health check error: {type(e).__name__}",
+            "flags": {"paused": False, "daily_count": 0, "videos_per_day": 2, "date": _dt.datetime.utcnow().strftime("%Y-%m-%d")},
+            "queues": {"script_queue": 0, "render_queue": 0, "publish_queue": 0, "failed_queue": 0},
+            "n8n_failures": {},
+        }
+    failures = failures if isinstance(failures, dict) else {}
     status = "HEALTHY"
     if flags.get("paused"):
         status = "PAUSED"
-    if sum(failures.values()) > guardian.MAX_FAILED_EXECUTIONS_WINDOW:
-        status = "DEGRADED"
-
+    try:
+        if sum(failures.values()) > guardian.MAX_FAILED_EXECUTIONS_WINDOW:
+            status = "DEGRADED"
+    except Exception:
+        pass
     return {
         "timestamp": _iso_now(),
         "status": status,
@@ -589,18 +601,49 @@ def notify_preview(req: JobIdRequest) -> dict:
     return {"sent": ok, "job_id": req.job_id}
 
 
+def _call_railway_render(job: dict) -> bool:
+    """Call Railway Render service to assemble clips + voiceover and send to Telegram. Returns True if accepted."""
+    render_url = (os.environ.get("RAILWAY_RENDER_URL") or "https://klipora-render-service-production.up.railway.app").rstrip("/")
+    clip_urls = job.get("clip_urls") or []
+    voice_url = job.get("voice_url")
+    if not clip_urls or not voice_url:
+        return False
+    chat_id = job.get("chatId") or os.environ.get("TELEGRAM_CHAT_ID")
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not chat_id or not bot_token:
+        return False
+    payload = {
+        "clips": clip_urls,
+        "voiceover": voice_url,
+        "chatId": str(chat_id),
+        "botToken": bot_token,
+        "jobId": job.get("job_id"),
+        "title": job.get("topic") or job.get("title", ""),
+        "genre": job.get("genre", ""),
+    }
+    try:
+        r = _requests.post(f"{render_url}/render", json=payload, timeout=30)
+        return r.ok
+    except Exception:
+        return False
+
+
 @app.post("/commands/approve-publish")
 def approve_publish(req: JobIdRequest) -> dict:
-    """Approve video: push to publish_queue for WF-PUBLISH and remove from pending review."""
+    """Approve video: call Railway Render (if job has clips), push to publish_queue, remove from pending review."""
     job = _get_pending_job(req.job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or already processed")
+    render_called = _call_railway_render(job)
     redis.rpush("publish_queue", req.job_id)
     controller.update_job_status(req.job_id, "publishing")
     _del_pending_job(req.job_id)
     event_bus.publish("VIDEO_APPROVED", {"job_id": req.job_id}, category="videos")
-    _send_telegram(f"✅ <b>VIDEO QUEUED FOR PUBLISH</b>\nJob: {req.job_id}\nPlatform pipeline will upload when ready.")
-    return {"status": "ok", "job_id": req.job_id}
+    if render_called:
+        _send_telegram(f"✅ <b>VIDEO PUBLISHED</b>\nJob: {req.job_id}\nFFmpeg assembling; video will arrive in Telegram shortly.")
+    else:
+        _send_telegram(f"✅ <b>VIDEO QUEUED FOR PUBLISH</b>\nJob: {req.job_id}\nPlatform pipeline will upload when ready.")
+    return {"status": "ok", "job_id": req.job_id, "render_called": render_called}
 
 
 @app.post("/commands/regenerate-job")

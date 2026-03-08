@@ -18,15 +18,74 @@ from datetime import datetime, timezone, timedelta
 import requests
 
 # Add repo root for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+
+
+def _looks_like_telegram_token(s: str) -> bool:
+    """Real Telegram tokens: digits:alphanumeric, ~45 chars; reject only obvious placeholder (xxx)."""
+    if not s or len(s) < 40:
+        return False
+    if ":" not in s:
+        return False
+    left, _, right = s.partition(":")
+    if left.isdigit() and len(right) >= 30:
+        if right.endswith("xxxx") or "xxxxxxxx" in right:
+            return False
+        return True
+    return False
+
+def _load_env_file() -> None:
+    """Load KEY=value lines from KEY=value.env or .env into os.environ (no dotenv needed)."""
+    token_candidates = []
+    for name in ("KEY=value.env", ".env"):
+        path = os.path.join(_ROOT, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line and not line.startswith("="):
+                        key, _, value = line.partition("=")
+                        key = key.strip().lstrip("|").strip()
+                        value = value.strip().strip('"').strip("'").rstrip("|").strip()
+                        if key:
+                            os.environ[key] = value
+                        if value and _looks_like_telegram_token(value):
+                            token_candidates.append(value)
+                    for part in line.replace("|", " ").split():
+                        part = part.strip("'\"").rstrip(",")
+                        if _looks_like_telegram_token(part):
+                            token_candidates.append(part)
+        except Exception:
+            pass
+        break
+    if token_candidates and not _looks_like_telegram_token(os.environ.get("TELEGRAM_BOT_TOKEN") or ""):
+        os.environ["TELEGRAM_BOT_TOKEN"] = token_candidates[-1]
+
+
+_load_env_file()
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 # ── Config ─────────────────────────────────────────────────────────────────
-MISSION_CONTROL_URL = os.environ.get("MISSION_CONTROL_URL", "").rstrip("/")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-OWNER_TELEGRAM_ID = os.environ.get("OWNER_TELEGRAM_ID") or os.environ.get("TELEGRAM_CHAT_ID")
+_raw_url = (
+    os.environ.get("MISSION_CONTROL_URL")
+    or os.environ.get("mission_control_url")
+    or ""
+).strip().rstrip("/")
+# Default if nothing set or empty (user can override in KEY=value.env)
+MISSION_CONTROL_URL = _raw_url or "https://domainbuddy7-web-klipora-production.up.railway.app"
+TELEGRAM_BOT_TOKEN = (
+    os.environ.get("TELEGRAM_BOT_TOKEN")
+    or os.environ.get("BOT_TOKEN")
+    or os.environ.get("telegram_bot_token")
+)
+OWNER_TELEGRAM_ID = os.environ.get("OWNER_TELEGRAM_ID") or os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("telegram_chat_id")
 
 try:
     from Infrastructure.redis_client import get_redis_client
@@ -54,13 +113,20 @@ def _set_state(chat_id: int, state: dict) -> None:
     redis.set(_redis_key(chat_id), json.dumps(state))
 
 def _api_get(path: str) -> dict:
+    """GET Mission Control; returns JSON dict or dict with _error, _code for status panel."""
     if not MISSION_CONTROL_URL:
         return {}
     try:
-        r = requests.get(f"{MISSION_CONTROL_URL}{path}", timeout=10)
-        return r.json() if r.ok else {}
-    except Exception:
-        return {}
+        r = requests.get(f"{MISSION_CONTROL_URL}{path}", timeout=15)
+        if r.ok:
+            return r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        return {"_error": f"HTTP {r.status_code}", "_code": r.status_code}
+    except requests.exceptions.Timeout:
+        return {"_error": "timeout", "_code": 0}
+    except requests.exceptions.ConnectionError:
+        return {"_error": "connection failed", "_code": 0}
+    except Exception as e:
+        return {"_error": "error", "_code": 0}
 
 def _api_post(path: str, json_body: dict | None = None) -> dict:
     if not MISSION_CONTROL_URL:
@@ -86,7 +152,18 @@ def _owner_only(update: Update) -> bool:
         return True
     user_id = str(update.effective_user.id) if update.effective_user else None
     chat_id = str(update.effective_chat.id) if update.effective_chat else None
-    return user_id == OWNER_TELEGRAM_ID or chat_id == OWNER_TELEGRAM_ID
+    owner = str(OWNER_TELEGRAM_ID).strip()
+    return user_id == owner or chat_id == owner
+
+
+def _unauthorized_message(update: Update) -> str:
+    """Message when owner check fails; include user ID so they can add it to env."""
+    uid = update.effective_user.id if update.effective_user else None
+    cid = update.effective_chat.id if update.effective_chat else None
+    msg = "⛔ Unauthorized. Only the owner can use this bot."
+    if uid is not None:
+        msg += f"\n\nYour Telegram ID: <code>{uid}</code>\nAdd to KEY=value.env:\nOWNER_TELEGRAM_ID={uid}\nThen restart the bot."
+    return msg
 
 
 def _next_run_uae() -> str:
@@ -107,9 +184,43 @@ def _build_status_panel() -> tuple[str, InlineKeyboardMarkup]:
     h = _api_get("/health/system")
     rev = _api_get("/finance/revenue")
     bud = _api_get("/finance/budget")
-    if not h:
+    failed = not h or h.get("_error")
+    if failed:
+        url_hint = ""
+        if not MISSION_CONTROL_URL:
+            url_hint = "\n\nAdd to KEY=value.env:\nMISSION_CONTROL_URL=https://domainbuddy7-web-klipora-production.up.railway.app"
+        else:
+            url_hint = f"\n\nCurrent URL: <code>{MISSION_CONTROL_URL}</code>\nIf wrong, fix in KEY=value.env and restart the bot."
+        reason = ""
+        if h and h.get("_error"):
+            err = h["_error"]
+            code = h.get("_code")
+            if code == 503:
+                reason = " (API returned 503 — check Railway env: UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, N8N_URL, then redeploy)"
+            elif err == "timeout":
+                reason = " (timeout — try again or check if this machine can reach Railway; firewall/VPN may block)"
+            elif err == "connection failed":
+                reason = " (connection failed — bot cannot reach Railway from this network; try same URL in browser from this PC)"
+            elif err.startswith("HTTP "):
+                reason = f" ({err})"
+            else:
+                reason = f" ({err})"
+        # If /health/system failed, check whether we can reach the API at all (e.g. /health works in browser)
+        reach = _api_get("/health")
+        if reach and not reach.get("_error") and reach.get("config_ok") is True:
+            return (
+                "🤖 <b>KLIPORA SYSTEM STATUS</b>\n\n⚠️ System health check failed"
+                + reason
+                + ", but the API root is reachable (config_ok: true). Try Refresh again or check Railway logs."
+                + url_hint,
+                _status_panel_keyboard(),
+            )
         return (
-            "🤖 <b>KLIPORA SYSTEM STATUS</b>\n\n⚠️ Could not reach Mission Control API. Check MISSION_CONTROL_URL.",
+            "🤖 <b>KLIPORA SYSTEM STATUS</b>\n\n⚠️ Could not reach Mission Control API"
+            + reason
+            + "."
+            + url_hint
+            + "\n\nThen restart the bot.",
             _status_panel_keyboard(),
         )
     status = h.get("status", "?")
@@ -298,9 +409,19 @@ def _automation_panel_keyboard() -> InlineKeyboardMarkup:
 GENRES = [
     "Mystery", "Horror", "Space", "Ancient Civilizations", "Conspiracies",
     "Psychology", "Science Mysteries", "Hidden History", "Wealth & Power", "Future & Technology",
+    "True Crime", "Nature", "Philosophy", "Art & Culture", "Sports", "Health & Wellness",
+    "Unexplained Phenomena", "Lost Treasures", "Famous Disappearances", "Curses & Legends",
 ]
-VISUAL_STYLES = ["Dark Cinematic", "Bright Vivid", "Foggy Mystery", "High Energy", "Epic Historical", "Colorful"]
-NARRATION_STYLES = ["Dramatic", "Calm Deep", "High Energy", "Mysterious", "Documentary"]
+VISUAL_STYLES = [
+    "Dark Cinematic", "Bright Vivid", "Foggy Mystery", "High Energy", "Epic Historical", "Colorful",
+    "Noir", "Vintage Film", "Minimalist", "Surreal", "Documentary Style", "Cinematic B-Roll",
+    "Neon Cyberpunk", "Natural Light", "Moody Shadows", "Golden Hour",
+]
+NARRATION_STYLES = [
+    "Dramatic", "Calm Deep", "High Energy", "Mysterious", "Documentary",
+    "Whisper", "Storyteller", "News Anchor", "Conversational", "Epic Trailer",
+    "Suspenseful", "Warm & Friendly", "Authoritative", "Intimate",
+]
 DURATIONS = ["20", "30", "40", "50"]
 ASPECTS = [("9:16", "Shorts"), ("16:9", "YouTube"), ("1:1", "Instagram")]
 
@@ -394,7 +515,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _owner_only(update):
-        await update.message.reply_text("⛔ Unauthorized. Only the owner can use this bot.")
+        await update.message.reply_text(_unauthorized_message(update), parse_mode="HTML")
         return
     await update.message.reply_text(
         "🛸 <b>KLIPORA COMMAND CENTER</b>\n\n"
@@ -449,7 +570,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     if not _owner_only(update):
-        await query.edit_message_text("⛔ Unauthorized.")
+        await query.edit_message_text(_unauthorized_message(update), parse_mode="HTML")
         return
 
     chat_id = update.effective_chat.id
@@ -610,9 +731,33 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         result = _api_post("/commands/generate-video", body)
         _set_state(chat_id, {})
         if result.get("job"):
-            await query.edit_message_text(f"✅ Video job created: {result['job'].get('id', 'N/A')}. Pipeline will process it.", reply_markup=main_menu_keyboard(), parse_mode="HTML")
+            job_id = result["job"].get("id", "N/A")
+            await query.edit_message_text(
+                f"✅ <b>Video generation started</b>\n\n"
+                f"Job ID: <code>{job_id}</code>\n"
+                f"Genre: {state.get('genre')} · {state.get('visual_style')} · {state.get('narration_style')}\n\n"
+                f"🔄 Pipeline is processing (script → video → assembly).\n"
+                f"You'll get a <b>review message</b> in Telegram when the video is ready to Approve or Discard.",
+                reply_markup=main_menu_keyboard(),
+                parse_mode="HTML",
+            )
+        elif not result and not MISSION_CONTROL_URL:
+            await query.edit_message_text(
+                "❌ Mission Control URL not set. Add MISSION_CONTROL_URL to KEY=value.env and restart the bot.",
+                reply_markup=main_menu_keyboard(),
+                parse_mode="HTML",
+            )
+        elif not result:
+            await query.edit_message_text(
+                "❌ Could not reach Mission Control API. Check MISSION_CONTROL_URL in KEY=value.env and that the API is running.",
+                reply_markup=main_menu_keyboard(),
+                parse_mode="HTML",
+            )
         else:
-            await query.edit_message_text(f"❌ Failed: {result.get('detail', result)}", reply_markup=main_menu_keyboard(), parse_mode="HTML")
+            detail = result.get("detail") or result
+            if isinstance(detail, dict):
+                detail = detail.get("message", str(detail))
+            await query.edit_message_text(f"❌ Failed: {detail}", reply_markup=main_menu_keyboard(), parse_mode="HTML")
         return
 
     if data == "menu_status":

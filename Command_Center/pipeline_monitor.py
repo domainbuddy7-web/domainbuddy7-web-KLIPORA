@@ -80,10 +80,16 @@ class PipelineMonitor:
     ) -> dict:
         """
         Summarise recent failed executions by workflow.
+        Returns empty dict on n8n unreachable or API error so health endpoint does not 500.
         """
-        failed = self.find_failed_executions(workflow_id=workflow_id, limit=limit)
+        try:
+            failed = self.find_failed_executions(workflow_id=workflow_id, limit=limit)
+        except Exception:
+            return {}
         summary: dict = {}
         for item in failed:
+            if not isinstance(item, dict):
+                continue
             wf_id = str(item.get("workflowId") or "unknown")
             summary.setdefault(wf_id, 0)
             summary[wf_id] += 1

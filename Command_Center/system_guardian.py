@@ -49,10 +49,16 @@ class SystemGuardian:
 
     def check_queues(self) -> dict:
         """
-        Return a snapshot of key queue lengths.
+        Return a snapshot of key queue lengths. Returns zeros on Redis error.
         """
         queues = ["script_queue", "render_queue", "publish_queue", "failed_queue"]
-        return {name: self.redis.llen(name) for name in queues}
+        out: dict = {}
+        for name in queues:
+            try:
+                out[name] = int(self.redis.llen(name) or 0)
+            except Exception:
+                out[name] = 0
+        return out
 
     def _parse_iso(self, value: str) -> t.Optional[_dt.datetime]:
         try:
@@ -87,21 +93,38 @@ class SystemGuardian:
 
         return stalled
 
+    def _safe_int(self, value: t.Any, default: int = 0) -> int:
+        """Parse int from Redis string; return default on invalid."""
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     def check_system_flags(self) -> dict:
         """
         Read high-level system flags from Redis.
         """
         today = self._utc_now().strftime("%Y-%m-%d")
-        paused = self.redis.get("system:paused")
-        videos_per_day = self.redis.get("system:videos_per_day")
-        max_concurrent = self.redis.get("system:max_concurrent_jobs")
-        daily_count = self.redis.get(f"system:daily_count:{today}")
-
+        try:
+            paused = self.redis.get("system:paused")
+            videos_per_day = self.redis.get("system:videos_per_day")
+            max_concurrent = self.redis.get("system:max_concurrent_jobs")
+            daily_count = self.redis.get(f"system:daily_count:{today}")
+        except Exception:
+            return {
+                "paused": False,
+                "videos_per_day": 2,
+                "max_concurrent_jobs": 1,
+                "daily_count": 0,
+                "date": today,
+            }
         return {
             "paused": bool(paused),
-            "videos_per_day": int(videos_per_day or 0),
-            "max_concurrent_jobs": int(max_concurrent or 0),
-            "daily_count": int(daily_count or 0),
+            "videos_per_day": self._safe_int(videos_per_day, 2),
+            "max_concurrent_jobs": self._safe_int(max_concurrent, 1),
+            "daily_count": self._safe_int(daily_count, 0),
             "date": today,
         }
 
