@@ -1,0 +1,33 @@
+# KLIPORA — Hands-off orchestration: run company cycle on a schedule
+# After one-time setup (see AUTOMATION_SETUP.md), this runs automatically; no need to trigger manually.
+
+name: Run KLIPORA cycle
+
+on:
+  schedule:
+    # Strictly 2x per day: 12:00 noon and 8:00 PM UAE (UTC+4) = 08:00 and 16:00 UTC
+    - cron: '0 8,16 * * *'
+  workflow_dispatch:  # Allow manual "Run workflow" from GitHub Actions tab
+
+jobs:
+  run-cycle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Mission Control run-cycle
+        run: |
+          URL="${{ secrets.MISSION_CONTROL_URL }}"
+          if [ -z "$URL" ]; then
+            echo "::warning:: MISSION_CONTROL_URL secret not set. Add it in repo Settings → Secrets."
+            exit 0
+          fi
+          # Ensure no trailing slash for consistency
+          URL="${URL%/}"
+          echo "Calling POST ${URL}/commands/run-cycle"
+          HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" -X POST "${URL}/commands/run-cycle" -H "Content-Type: application/json")
+          echo "Response HTTP $HTTP_CODE"
+          cat /tmp/response.json | head -c 500
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Cycle completed successfully."
+          else
+            echo "::warning:: Run-cycle returned HTTP $HTTP_CODE (check Mission Control API and Variables)."
+          fi
