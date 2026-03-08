@@ -13,4 +13,5 @@ ENV PORT=8000
 EXPOSE 8000
 ENV PYTHONPATH=/app
 
-CMD sh -c 'uvicorn Command_Center.dashboard_api:app --host 0.0.0.0 --port ${PORT:-8000}'
+# Use start script so port is read from env and logs are clear
+CMD ["python", "start_api.py"]

@@ -17,7 +17,10 @@ Control endpoints:
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import typing as t
+
+import requests as _requests
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +36,7 @@ controller = None
 monitor = None
 brain = None
 event_bus = None
+opportunity_engine = None
 
 try:
     from Infrastructure.redis_client import get_redis_client
@@ -41,6 +45,7 @@ try:
     from Command_Center.pipeline_monitor import PipelineMonitor
     from Command_Center.company_brain import CompanyBrain
     from Command_Center.event_bus import get_event_bus
+    from Agents.opportunity_engine import OpportunityEngine
 
     redis = get_redis_client()
     guardian = SystemGuardian(redis=redis)
@@ -48,6 +53,7 @@ try:
     monitor = PipelineMonitor()
     brain = CompanyBrain(redis=redis)
     event_bus = get_event_bus()
+    opportunity_engine = OpportunityEngine(redis=redis, event_bus=event_bus)
     _config_ok = True
 except BaseException as e:
     _config_error = f"{type(e).__name__}: {e}"
@@ -96,6 +102,73 @@ def _iso_now() -> str:
     return _dt.datetime.utcnow().isoformat() + "Z"
 
 
+def _send_telegram(text: str) -> bool:
+    """Send a message to the owner via Telegram. Uses TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars. No-op if unset."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False
+    try:
+        r = _requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=5,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+def _send_telegram_review(job_id: str, job: dict) -> bool:
+    """Send human-in-the-loop review message with preview and Approve/Regenerate/Edit/Discard buttons."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False
+    topic = job.get("topic", "—")
+    genre = job.get("genre", "—")
+    visual = job.get("visual_style") or job.get("meta", {}).get("visual_style", "—")
+    narration = job.get("narration_style") or job.get("meta", {}).get("narration_style", "—")
+    duration = job.get("duration") or job.get("meta", {}).get("duration", "—")
+    aspect = job.get("aspect_ratio") or job.get("meta", {}).get("aspect_ratio", "—")
+    video_url = job.get("video_url") or job.get("preview_url", "")
+    script_summary = job.get("script_summary", "")[:200] if job.get("script_summary") else "—"
+    quality = job.get("quality_score")
+    score_line = f"\n<b>Quality score:</b> {quality}/100\n⚠️ Score &lt; 60 — consider Regenerate.\n" if quality is not None and quality < 60 else (f"\n<b>Quality score:</b> {quality}/100\n" if quality is not None else "")
+
+    caption = (
+        "🎬 <b>KLIPORA VIDEO READY FOR REVIEW</b>\n\n"
+        f"<b>Topic:</b> {topic}\n"
+        f"<b>Genre:</b> {genre}\n"
+        f"<b>Visual style:</b> {visual}\n"
+        f"<b>Narration:</b> {narration}\n"
+        f"<b>Duration:</b> {duration} sec\n"
+        f"<b>Aspect ratio:</b> {aspect}\n"
+        f"{score_line}"
+        f"<b>Script summary:</b> {script_summary}\n\n"
+    )
+    if video_url:
+        caption += f"<b>Preview:</b> {video_url}\n\n"
+
+    # Telegram callback_data max 64 bytes; UUID (36) + prefix fits
+    reply_markup = {
+        "inline_keyboard": [
+            [{"text": "✅ Approve & Publish", "callback_data": f"approve_publish_{job_id}"}],
+            [{"text": "🔄 Regenerate", "callback_data": f"regenerate_{job_id}"}, {"text": "✏️ Edit Metadata", "callback_data": f"edit_meta_{job_id}"}],
+            [{"text": "❌ Discard", "callback_data": f"discard_{job_id}"}],
+        ]
+    }
+    try:
+        r = _requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": caption, "parse_mode": "HTML", "reply_markup": reply_markup},
+            timeout=5,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
 # ── Request models ────────────────────────────────────────────────────────
 
 
@@ -111,6 +184,17 @@ class GenerateVideoRequest(BaseModel):
 
 class RunExperimentRequest(BaseModel):
     experiment_id: str
+
+
+class JobIdRequest(BaseModel):
+    job_id: str
+
+
+class UpdateMetadataRequest(BaseModel):
+    job_id: str
+    title: t.Optional[str] = None
+    description: t.Optional[str] = None
+    hashtags: t.Optional[str] = None
 
 
 # ── System health and production endpoints ───────────────────────────────
@@ -296,6 +380,37 @@ def opportunities_view() -> dict:
     return {"opportunities": opportunities}
 
 
+class OpportunityActionRequest(BaseModel):
+    opportunity_id: str
+
+
+class RejectOpportunityRequest(BaseModel):
+    opportunity_id: str
+    reason: str = ""
+
+
+@app.post("/commands/approve-opportunity")
+def approve_opportunity_cmd(req: OpportunityActionRequest) -> dict:
+    """Move first matching opportunity from pending to approved."""
+    if not opportunity_engine:
+        raise HTTPException(status_code=503, detail="Opportunity engine not loaded")
+    result = opportunity_engine.approve_opportunity(req.opportunity_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Opportunity not found or already processed")
+    return {"status": "ok", "opportunity": result}
+
+
+@app.post("/commands/reject-opportunity")
+def reject_opportunity_cmd(req: RejectOpportunityRequest) -> dict:
+    """Move opportunity from pending to rejected."""
+    if not opportunity_engine:
+        raise HTTPException(status_code=503, detail="Opportunity engine not loaded")
+    result = opportunity_engine.reject_opportunity(req.opportunity_id, req.reason or "Rejected via dashboard")
+    if not result:
+        raise HTTPException(status_code=404, detail="Opportunity not found or already processed")
+    return {"status": "ok", "opportunity": result}
+
+
 # ── Notifications / Alerts ------------------------------------------------
 
 
@@ -400,15 +515,165 @@ def run_experiment(req: RunExperimentRequest) -> dict:
     return {"status": "queued", "experiment_id": req.experiment_id}
 
 
+def _get_pending_job(job_id: str) -> t.Optional[dict]:
+    """Load pending_approve:{job_id} from Redis. Handles JSON or URL-encoded JSON."""
+    import urllib.parse
+    raw = redis.get(f"pending_approve:{job_id}")
+    if not raw:
+        return None
+    s = raw if isinstance(raw, str) else (raw.decode("utf-8") if hasattr(raw, "decode") else str(raw))
+    for val in (s, urllib.parse.unquote(s)):
+        try:
+            return json.loads(val)
+        except Exception:
+            continue
+    return None
+
+
+def _set_pending_job(job_id: str, job: dict) -> None:
+    """Write pending_approve:{job_id}. Optional: set TTL 24h (86400) to auto-expire."""
+    redis.set_json(f"pending_approve:{job_id}", job)
+
+
+def _del_pending_job(job_id: str) -> None:
+    redis.delete(f"pending_approve:{job_id}")
+
+
+@app.post("/internal/daily-report")
+def send_daily_report() -> dict:
+    """
+    Send the KLIPORA daily report to Telegram. Call from cron or n8n each morning.
+    """
+    prod = guardian.check_system_flags()
+    rev = redis.get("finance:revenue:today") or "0"
+    try:
+        rev_today = float(rev)
+    except ValueError:
+        rev_today = 0.0
+    month_raw = redis.get("finance:revenue:month") or "0"
+    try:
+        rev_month = float(month_raw)
+    except ValueError:
+        rev_month = 0.0
+    exps = redis.get_json("experiments:active") or []
+    top = exps[0] if exps else None
+    opps = redis.get_json("opportunities:pending") or []
+    msg = (
+        "📊 <b>KLIPORA DAILY REPORT</b>\n\n"
+        f"Videos Published: {prod.get('daily_count', 0)}\n"
+        f"Revenue: ${rev_today:.2f}\n"
+        f"Expenses: —\n\n"
+        f"<b>Top Experiment</b>\n{top.get('title', '—') if top else '—'}\n\n"
+        f"<b>New Opportunities</b>\n"
+    )
+    for o in opps[:3]:
+        msg += f"• {o.get('title', '?')}\n"
+    if not opps:
+        msg += "—\n"
+    _send_telegram(msg)
+    return {"sent": True}
+
+
+@app.post("/internal/notify-preview")
+def notify_preview(req: JobIdRequest) -> dict:
+    """
+    Human-in-the-loop: send preview to Telegram with Approve/Regenerate/Edit/Discard.
+    Call this from n8n WF-ASSEMBLE after storing the job in Redis pending_approve:{job_id}.
+    Recommended: set TTL 86400 (24h) on pending_approve:{job_id} in n8n so unreviewed jobs expire.
+    """
+    job = _get_pending_job(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="pending_approve:{job_id} not found")
+    job.setdefault("job_id", req.job_id)
+    ok = _send_telegram_review(req.job_id, job)
+    return {"sent": ok, "job_id": req.job_id}
+
+
+@app.post("/commands/approve-publish")
+def approve_publish(req: JobIdRequest) -> dict:
+    """Approve video: push to publish_queue for WF-PUBLISH and remove from pending review."""
+    job = _get_pending_job(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or already processed")
+    redis.rpush("publish_queue", req.job_id)
+    controller.update_job_status(req.job_id, "publishing")
+    _del_pending_job(req.job_id)
+    event_bus.publish("VIDEO_APPROVED", {"job_id": req.job_id}, category="videos")
+    _send_telegram(f"✅ <b>VIDEO QUEUED FOR PUBLISH</b>\nJob: {req.job_id}\nPlatform pipeline will upload when ready.")
+    return {"status": "ok", "job_id": req.job_id}
+
+
+@app.post("/commands/regenerate-job")
+def regenerate_job(req: JobIdRequest) -> dict:
+    """Send job back to WF-GEN (same topic, new script/visuals). Removes from pending review."""
+    job = _get_pending_job(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or already processed")
+    topic = job.get("topic") or "General"
+    meta = job.get("meta") or {}
+    controller.start_generation_job(
+        topic=topic,
+        genre=job.get("genre"),
+        visual_style=job.get("visual_style") or meta.get("visual_style"),
+        narration_style=job.get("narration_style") or meta.get("narration_style"),
+        duration=str(job.get("duration", "")) or meta.get("duration"),
+        aspect_ratio=job.get("aspect_ratio") or meta.get("aspect_ratio"),
+        job_id=None,
+    )
+    _del_pending_job(req.job_id)
+    event_bus.publish("VIDEO_REGENERATE", {"job_id": req.job_id, "topic": topic}, category="videos")
+    _send_telegram(f"🔄 <b>Regenerating</b>\nTopic: {topic}\nNew job queued for script generation.")
+    return {"status": "ok", "job_id": req.job_id}
+
+
+@app.post("/commands/discard-job")
+def discard_job(req: JobIdRequest) -> dict:
+    """Discard video: add topic to used_topics, remove from pending. Prevents topic reuse."""
+    job = _get_pending_job(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or already processed")
+    topic = job.get("topic") or ""
+    if topic:
+        redis.sadd("used_topics", topic)
+    _del_pending_job(req.job_id)
+    redis.rpush("failed_queue", req.job_id)
+    event_bus.publish("VIDEO_DISCARDED", {"job_id": req.job_id, "topic": topic}, category="videos")
+    _send_telegram(f"❌ <b>Discarded</b>\nJob: {req.job_id}\nTopic marked used.")
+    return {"status": "ok", "job_id": req.job_id}
+
+
+@app.patch("/commands/update-job-metadata")
+def update_job_metadata(req: UpdateMetadataRequest) -> dict:
+    """Update title/description/hashtags for a pending job; then owner can Approve & Publish."""
+    job = _get_pending_job(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or already processed")
+    if req.title is not None:
+        job["title"] = req.title
+    if req.description is not None:
+        job["description"] = req.description
+    if req.hashtags is not None:
+        job["hashtags"] = req.hashtags
+    _set_pending_job(req.job_id, job)
+    return {"status": "ok", "job_id": req.job_id}
+
+
 @app.post("/commands/run-cycle")
 def run_orchestration_cycle() -> dict:
     """
     Run one KLIPORA orchestration cycle: CEO plan → CTO health check → Operations production.
-    Call this from a cron job or n8n schedule to drive the company loop in the cloud.
+    Sends Telegram alerts for session start and stop when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set.
     """
     from Agents.ceo_agent import CEOAgent
     from Agents.cto_agent import CTOAgent
     from Agents.operations_agent import OperationsAgent
+
+    now = _iso_now()
+    _send_telegram(
+        f"🟢 <b>KLIPORA session started</b>\n"
+        f"Time: {now}\n"
+        f"Cycle: CEO plan → CTO health → Operations production."
+    )
 
     ceo = CEOAgent(redis=redis, event_bus=event_bus)
     cto = CTOAgent(redis=redis, event_bus=event_bus)
@@ -422,6 +687,16 @@ def run_orchestration_cycle() -> dict:
         "ORCHESTRATION_CYCLE_COMPLETE",
         {"health": health_summary, "production": production_result},
         category="alerts",
+    )
+
+    status = production_result.get("status", "ok")
+    jobs = production_result.get("created_jobs", [])
+    summary = f"Status: {status}. Jobs created: {len(jobs)}."
+    _send_telegram(
+        f"🔴 <b>KLIPORA session finished</b>\n"
+        f"Time: {_iso_now()}\n"
+        f"{summary}\n"
+        f"Paused: {health_summary.get('flags', {}).get('paused', False)}"
     )
 
     return {

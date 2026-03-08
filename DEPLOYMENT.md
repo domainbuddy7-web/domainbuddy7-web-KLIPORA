@@ -37,8 +37,11 @@ In Railway → your service → **Variables** tab → **Add Variable** (or **New
 | `UPSTASH_REDIS_REST_TOKEN` | Your Upstash REST token (same as `upstash_token` in your local `Infrastructure/config.json`) |
 | `N8N_URL` | `https://n8n-production-2762.up.railway.app` |
 | `N8N_API_KEY` | Your n8n API key (same as `n8n_api_key` in local config, or from n8n Settings → API) |
+| `TELEGRAM_BOT_TOKEN` | Your Telegram bot token (for session start/stop alerts from run-cycle) |
+| `TELEGRAM_CHAT_ID` | Your Telegram chat ID (owner; receives alerts) |
 
-If **UPSTASH_REDIS_REST_URL** or **UPSTASH_REDIS_REST_TOKEN** is missing, the app will crash with: `Redis config not found. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN`.
+If **UPSTASH_REDIS_REST_URL** or **UPSTASH_REDIS_REST_TOKEN** is missing, the app will crash with: `Redis config not found. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN`.  
+Setting **TELEGRAM_BOT_TOKEN** and **TELEGRAM_CHAT_ID** enables session start/stop notifications when each run-cycle runs.
 
 In Railway → your service → **Variables**, add:
 
