@@ -1,0 +1,137 @@
+PROJECT CONTEXT: KLIPORA — Persistent memory for Cursor/chat sessions
+
+Reference this file in new chats to reconstruct project context: @PROJECT CONTEXT KLIPORA for chatgpt if chat fail - persisitant memory.txt or open E:\KLIPORA\PROJECT CONTEXT KLIPORA for chatgpt if chat fail - persisitant memory.txt
+
+================================================================================
+SYSTEM NAME
+================================================================================
+KLIPORA Autonomous Video Pipeline
+
+================================================================================
+INFRASTRUCTURE
+================================================================================
+• n8n hosted on Railway
+• Redis via Upstash
+• Mission Control API hosted on Railway
+• Telegram Command Center bot
+
+================================================================================
+N8N INSTANCE
+================================================================================
+https://n8n-production-2762.up.railway.app
+
+================================================================================
+MISSION CONTROL
+================================================================================
+https://domainbuddy7-web-klipora-production.up.railway.app
+
+Health endpoint:
+  GET /health
+
+Expected response:
+  HTTP 200
+  {"status": "ok", "config_ok": true}
+
+================================================================================
+WORKFLOWS
+================================================================================
+WF-GEN
+  ID: VCw1KVSRcgRmlujA
+
+WF-VIDEO
+  ID: jTJnXHXjqo7FwGZV
+
+WF-ASSEMBLE
+  ID: EzV0MUz5U6ZOnOjV
+
+================================================================================
+PIPELINE FLOW
+================================================================================
+WF-GEN
+  → WF-VIDEO
+  → WF-ASSEMBLE
+  → Mission Control /internal/notify-preview
+  → Telegram
+
+================================================================================
+BUSINESS RULE
+================================================================================
+Only 2 videos are generated per day.
+
+================================================================================
+CRON SCHEDULE
+================================================================================
+12:00
+20:00
+
+================================================================================
+EXECUTIONS PER DAY
+================================================================================
+WF-GEN: 2
+WF-VIDEO: 2
+WF-ASSEMBLE: 2
+
+================================================================================
+MISSION CONTROL CONNECTIVITY FIXES (APPLIED)
+================================================================================
+• Both env files must be loaded:
+  KEY=value.env
+  .env
+
+• MISSION_CONTROL_URL must be printed at startup.
+
+• /health response must always attempt JSON parsing even if Content-Type header is missing.
+
+================================================================================
+TELEGRAM BOT FILES
+================================================================================
+Command_Center/telegram_command_center.py
+Command_Center/telegram_services/diagnostics.py
+
+================================================================================
+DUPLICATE JOB PROTECTION
+================================================================================
+WF-GEN must implement Redis idempotency:
+
+  SET job:lock:{jobId} 1 NX EX 3600
+
+If lock exists → stop workflow early.
+
+================================================================================
+CURRENT GOALS
+================================================================================
+• Verify Mission Control connectivity
+• Ensure environment loading works correctly
+• Remove unnecessary poller triggers
+• Maintain simplified 2-video/day workflow
+• Stabilize Telegram diagnostics
+
+================================================================================
+AUTHORITATIVE DOCS (architecture lock)
+================================================================================
+• docs/KLIPORA_SYSTEM_BRAIN.md — System architecture, Redis schema, automation flow
+• docs/STRATEGIC_BRAIN.md — Strategic Brain layer
+• .cursor/rules/klipora-architecture-lock.mdc — No local execution scripts; Redis = memory; n8n = automation only
+
+================================================================================
+PROJECT DIRECTORY
+================================================================================
+E:\KLIPORA
+
+================================================================================
+KEY CONFIGURATION (env)
+================================================================================
+Load from KEY=value.env and .env (both; .env overrides):
+  MISSION_CONTROL_URL
+  N8N_URL
+  N8N_API_KEY
+  TELEGRAM_BOT_TOKEN
+  TELEGRAM_CHAT_ID / OWNER_TELEGRAM_ID
+  (Redis: UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN — typically on Mission Control / Railway)
+
+================================================================================
+WORKFLOW CONSTRAINTS
+================================================================================
+• Do not modify workflows unless explicitly instructed.
+• When debugging: identify root cause, verify env, suggest safe fixes, avoid destructive changes.
+• Automation runs only via Mission Control API, n8n, and Telegram — no local pipeline execution scripts.

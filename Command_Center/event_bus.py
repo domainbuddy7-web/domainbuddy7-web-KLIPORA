@@ -46,21 +46,20 @@ class EventBus:
     ) -> None:
         """
         Publish a structured event into the global event stream and optional
-        category-specific stream.
+        category-specific stream. No-op on Redis failure to keep callers stable.
         """
-        event = {
-            "type": event_type,
-            "timestamp": self._iso_now(),
-            "data": data or {},
-        }
-        payload = json.dumps(event)
-
-        # Global stream (activity timeline)
-        self.redis.rpush("events:stream", payload)
-
-        # Optional additional category stream
-        if category:
-            self.redis.rpush(f"events:{category}", payload)
+        try:
+            event = {
+                "type": event_type,
+                "timestamp": self._iso_now(),
+                "data": data or {},
+            }
+            payload = json.dumps(event)
+            self.redis.rpush("events:stream", payload)
+            if category:
+                self.redis.rpush(f"events:{category}", payload)
+        except Exception:
+            pass
 
     def get_events(
         self,

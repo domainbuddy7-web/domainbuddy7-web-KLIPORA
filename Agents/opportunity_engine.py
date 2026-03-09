@@ -112,6 +112,8 @@ class OpportunityEngine:
     def register_opportunity(self, opp: Opportunity) -> Opportunity:
         """
         Compute score, persist as pending, and emit OPPORTUNITY_FOUND.
+        To send the opportunity to Telegram for approval, the caller should
+        POST to Mission Control /internal/notify-new-opportunity after registering.
         """
         opp.score = self.compute_score(opp)
 

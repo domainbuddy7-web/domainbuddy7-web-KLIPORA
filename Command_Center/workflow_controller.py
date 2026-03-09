@@ -45,6 +45,19 @@ from Infrastructure.redis_client import UpstashRedis, get_redis_client
 JobDict = t.Dict[str, t.Any]
 
 
+class WorkflowTriggerError(RuntimeError):
+    """Raised when n8n webhook cannot be reached (timeout, 5xx, connection)."""
+    pass
+
+
+class TopicRejectedError(RuntimeError):
+    """Raised when WF-GEN returns 400 because the topic is already in used_topics."""
+    def __init__(self, message: str, topic: str) -> None:
+        super().__init__(message)
+        self.message = message
+        self.topic = topic
+
+
 def _utc_now_iso() -> str:
     return _dt.datetime.utcnow().isoformat() + "Z"
 
@@ -58,9 +71,11 @@ class WorkflowController:
         self,
         redis: t.Optional[UpstashRedis] = None,
         n8n_client: t.Optional[N8nClient] = None,
+        webhook_path_gen: t.Optional[str] = None,
     ) -> None:
         self.redis = redis or get_redis_client()
         self.n8n = n8n_client or get_n8n_client()
+        self._webhook_path_gen = webhook_path_gen or "/webhook/wf-gen"
 
     # ── Job lifecycle helpers ─────────────────────────────────────────────
 
@@ -148,23 +163,59 @@ class WorkflowController:
             job_id=job_id,
         )
 
+        # WF-GEN Parse Job Params expects vstyle/nstyle (lowercase underscore); also send visual_style/narration_style for compatibility
+        vstyle = (visual_style or "").lower().replace(" ", "_").strip() or None
+        nstyle = (narration_style or "").lower().replace(" ", "_").strip() or None
+        # aspect_ratio: workflow expects 9x16; API may send 9:16
+        ar = (aspect_ratio or "").replace(":", "x").strip() or None
         payload = {
             "topic": topic,
             "genre": genre,
             "visual_style": visual_style,
             "narration_style": narration_style,
+            "vstyle": vstyle or "dark_cinematic",
+            "nstyle": nstyle or "dramatic",
             "duration": duration,
-            "aspect_ratio": aspect_ratio,
+            "aspect_ratio": ar or "9x16",
             "job_id": job["id"],
             "chat_id": chat_id,
         }
 
-        # n8n WF-GEN webhook path (aligned with existing configuration).
-        resp = self.n8n.trigger_webhook("/webhook/wf-gen", payload=payload)
-        resp.raise_for_status()
-
-        self.update_job_status(job["id"], "script_in_progress")
-        return job
+        # n8n WF-GEN webhook. 400 = topic rejected (raise TopicRejectedError). 5xx/connection = retry then WorkflowTriggerError.
+        last_err: t.Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                resp = self.n8n.trigger_webhook(self._webhook_path_gen, payload=payload)
+                if resp.status_code == 400:
+                    try:
+                        body = resp.json() if resp.headers.get("content-type", "").strip().startswith("application/json") else {}
+                    except Exception:
+                        body = {}
+                    if not isinstance(body, dict):
+                        body = {}
+                    msg = body.get("message") or "Topic already used."
+                    topic_val = body.get("topic") or topic
+                    raise TopicRejectedError(msg, topic_val)
+                if resp.ok:
+                    self.update_job_status(job["id"], "script_in_progress")
+                    return job
+                resp.raise_for_status()
+            except TopicRejectedError:
+                raise
+            except Exception as e:
+                last_err = e
+                if attempt == 0:
+                    continue
+        # Both attempts failed (5xx or connection): mark job failed, push to failed_queue, raise for API to return 503
+        try:
+            job["status"] = "failed"
+            job["updated_at"] = _utc_now_iso()
+            job.setdefault("meta", {})["failure_reason"] = "n8n_webhook_unreachable"
+            self.redis.set_json(self._job_key(job["id"]), job)
+            self.redis.rpush("failed_queue", job["id"])
+        except Exception:
+            pass
+        raise WorkflowTriggerError(f"n8n webhook unreachable: {last_err}") from last_err
 
     def trigger_trend_scan(self) -> None:
         """
@@ -218,5 +269,5 @@ class WorkflowController:
         self.redis.rpush("failed_queue", job_id)
 
 
-__all__ = ["WorkflowController"]
+__all__ = ["WorkflowController", "WorkflowTriggerError", "TopicRejectedError"]
 

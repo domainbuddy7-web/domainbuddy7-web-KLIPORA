@@ -3,12 +3,68 @@
   "nodes": [
     {
       "id": "asm-1",
-      "name": "Assembly Poller",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1,
+      "name": "WF-ASSEMBLE Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
       "position": [200, 300],
       "parameters": {
-        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 3 }] }
+        "path": "wf-assemble",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "asm-1-respond",
+      "name": "Respond Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [350, 180],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted' }) }}",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "asm-webhook-to-result",
+      "name": "Webhook Body to Render Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [350, 420],
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst body = item.body || item;\nconst pkg = body;\nconst encoded = encodeURIComponent(JSON.stringify(pkg));\nreturn [{ json: { result: encoded } }];"
+      }
+    },
+    {
+      "id": "asm-pause",
+      "name": "Check Paused",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [350, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "https://wealthy-hyena-4511.upstash.io/get/system:paused",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "asm-pause-if",
+      "name": "IF Not Paused",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [550, 300],
+      "parameters": {
+        "conditions": {
+          "string": [
+            { "value1": "={{ $json.result }}", "operation": "notEqual", "value2": "true" },
+            { "value1": "={{ $json.result }}", "operation": "notEqual", "value2": "1" }
+          ],
+          "combinator": "and"
+        }
       }
     },
     {
@@ -46,6 +102,16 @@
       "position": [800, 300],
       "parameters": {
         "jsCode": "const raw = $input.first().json.result;\nlet pkg;\ntry { pkg = JSON.parse(decodeURIComponent(raw)); } catch(e) { throw new Error('Decode failed: ' + e.message); }\nreturn [{ json: pkg }];"
+      }
+    },
+    {
+      "id": "asm-lock",
+      "name": "Try Lock (SETNX)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300],
+      "parameters": {
+        "jsCode": "const pkg = $input.first().json;\nconst jobId = pkg.job_id || pkg.id;\nif (!jobId) return [];\nconst key = 'processing:assembly:' + jobId;\nconst base = 'https://wealthy-hyena-4511.upstash.io';\nconst token = 'ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ';\ntry {\n  const res = await fetch(base, {\n    method: 'POST',\n    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },\n    body: JSON.stringify(['SET', key, '1', 'NX', 'EX', 300])\n  });\n  const data = await res.json();\n  const ok = data.result === 'OK' || data.result === true;\n  if (ok) return [{ json: pkg }];\n} catch (e) {}\nreturn [];"
       }
     },
     {
@@ -171,6 +237,35 @@
       }
     },
     {
+      "id": "asm-save-pending",
+      "name": "Save pending_approve to Redis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 260],
+      "parameters": {
+        "jsCode": "const pkg = $input.first().json;\nconst jobId = pkg.job_id || pkg.id;\nif (!jobId) throw new Error('No job_id in package');\nconst key = 'pending_approve:' + jobId;\nconst value = JSON.stringify({\n  job_id: jobId,\n  topic: pkg.selectedTopic || pkg.title || pkg.topic,\n  genre: pkg.genre,\n  clip_urls: pkg.clip_urls,\n  voice_url: pkg.voice_url,\n  music_url: pkg.music_url || pkg.music || null,\n  chatId: pkg.chatId,\n  visual_style: pkg.vstyle || pkg.visual_style,\n  narration_style: pkg.nstyle || pkg.narration_style,\n  duration: pkg.duration,\n  aspect_ratio: pkg.aspect_ratio,\n  script_summary: pkg.script_summary || ''\n});\nconst upstashUrl = 'https://wealthy-hyena-4511.upstash.io';\nconst token = 'ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ';\nconst res = await fetch(upstashUrl, {\n  method: 'POST',\n  headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },\n  body: JSON.stringify(['SETEX', key, 7200, value])\n});\nif (!res.ok) throw new Error('Redis SETEX failed: ' + await res.text());\nreturn [{ json: { job_id: jobId } }];"
+      }
+    },
+    {
+      "id": "asm-notify-preview",
+      "name": "Notify Preview (Mission Control)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2050, 260],
+      "parameters": {
+        "method": "POST",
+        "url": "https://domainbuddy7-web-klipora-production.up.railway.app/internal/notify-preview",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ job_id: $json.job_id }) }}"
+      }
+    },
+    {
       "id": "asm-requeue",
       "name": "Re-queue or Abandon",
       "type": "n8n-nodes-base.code",
@@ -211,7 +306,7 @@
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "{\n  \"clips\": {{ JSON.stringify($json.clip_urls) }},\n  \"voiceover\": \"{{ $json.voice_url }}\",\n  \"chatId\": \"{{ $json.chatId }}\",\n  \"botToken\": \"8187477791:AAHnYiq_zz5JCEnQeruW5Xt92ehl8xr2lbQ\",\n  \"jobId\": \"{{ $json.job_id }}\",\n  \"title\": \"{{ $json.selectedTopic || $json.title }}\",\n  \"genre\": \"{{ $json.genre }}\"\n}"
+        "body": "{\n  \"clips\": {{ JSON.stringify($json.clip_urls) }},\n  \"voiceover\": \"{{ $json.voice_url }}\",\n  \"chatId\": \"{{ $json.chatId }}\",\n  \"botToken\": \"8187477791:AAHnYiq_zz5JCEnQeruW5Xt92ehl8xr2lbQ\",\n  \"jobId\": \"{{ $json.job_id }}\",\n  \"title\": \"{{ $json.selectedTopic || $json.title }}\",\n  \"genre\": \"{{ $json.genre }}\",\n  \"music\": {{ $json.music_url ? JSON.stringify($json.music_url) : 'null' }}\n}"
       }
     },
     {
@@ -250,10 +345,19 @@
     }
   ],
   "connections": {
-    "Assembly Poller": { "main": [[{ "node": "RPOP render_queue", "type": "main", "index": 0 }]] },
+    "WF-ASSEMBLE Webhook": {
+      "main": [
+        [{ "node": "Respond Accepted", "type": "main", "index": 0 }],
+        [{ "node": "Webhook Body to Render Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Webhook Body to Render Result": { "main": [[{ "node": "IF Render Queue Not Empty", "type": "main", "index": 0 }]] },
+    "Check Paused": { "main": [[{ "node": "IF Not Paused", "type": "main", "index": 0 }]] },
+    "IF Not Paused": { "main": [[{ "node": "RPOP render_queue", "type": "main", "index": 0 }]] },
     "RPOP render_queue": { "main": [[{ "node": "IF Render Queue Not Empty", "type": "main", "index": 0 }]] },
     "IF Render Queue Not Empty": { "main": [[{ "node": "Decode Render Package", "type": "main", "index": 0 }]] },
-    "Decode Render Package": { "main": [[{ "node": "Poll All Scenes Status", "type": "main", "index": 0 }]] },
+    "Decode Render Package": { "main": [[{ "node": "Try Lock (SETNX)", "type": "main", "index": 0 }]] },
+    "Try Lock (SETNX)": { "main": [[{ "node": "Poll All Scenes Status", "type": "main", "index": 0 }]] },
     "Poll All Scenes Status": {
       "main": [[
         { "node": "Poll Scene 1", "type": "main", "index": 0 },
@@ -273,10 +377,11 @@
     "Check All Complete": { "main": [[{ "node": "IF All Complete", "type": "main", "index": 0 }]] },
     "IF All Complete": {
       "main": [
-        [{ "node": "Call Railway Render", "type": "main", "index": 0 }],
+        [{ "node": "Save pending_approve to Redis", "type": "main", "index": 0 }],
         [{ "node": "Re-queue or Abandon", "type": "main", "index": 0 }]
       ]
     },
+    "Save pending_approve to Redis": { "main": [[{ "node": "Notify Preview (Mission Control)", "type": "main", "index": 0 }]] },
     "Re-queue or Abandon": { "main": [[{ "node": "Re-push to render_queue", "type": "main", "index": 0 }]] },
     "Call Railway Render": { "main": [[{ "node": "Update Analytics", "type": "main", "index": 0 }]] },
     "Update Analytics": { "main": [[{ "node": "Log to Telegram", "type": "main", "index": 0 }]] }

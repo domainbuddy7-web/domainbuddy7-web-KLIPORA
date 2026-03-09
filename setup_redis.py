@@ -102,6 +102,20 @@ tasks = [
     # Initialise company-level keys (Phase 2 agent layer)
     ("SET",  ["company:active_projects", "[]"],       "Company: active_projects = []"),
     ("SET",  ["agent:cto:infra_status",  "healthy"],  "Agent: CTO infra_status = healthy"),
+
+    # Finance (policy: initial budget $440 max)
+    ("SET",  ["finance:capital_initial",  "440"],      "Finance: capital_initial = 440"),
+    ("SET",  ["finance:spent_total",     "0"],        "Finance: spent_total = 0"),
+    ("SET",  ["finance:remaining",       "440"],      "Finance: remaining = 440"),
+    ("SET",  ["finance:revenue:today",    "0"],       "Finance: revenue:today = 0"),
+    ("SET",  ["finance:revenue:month",   "0"],        "Finance: revenue:month = 0"),
+    ("SET",  ["finance:spend:category:api_usage", "0"], "Finance: api_usage = 0"),
+    ("SET",  ["finance:spend:category:cloud_hosting", "0"], "Finance: cloud_hosting = 0"),
+    ("SET",  ["finance:spend:category:tools", "0"],   "Finance: tools = 0"),
+    ("SET",  ["finance:spend:category:advertising", "0"], "Finance: advertising = 0"),
+
+    # Experiment Lab (max 3 active)
+    ("SET",  ["experiments:active", "[]"],            "Experiments: active = []"),
 ]
 
 ok = 0

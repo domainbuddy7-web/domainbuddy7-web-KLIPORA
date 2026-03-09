@@ -3,12 +3,68 @@
   "nodes": [
     {
       "id": "vid-1",
-      "name": "Queue Poller",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1,
+      "name": "WF-VIDEO Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
       "position": [200, 300],
       "parameters": {
-        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 2 }] }
+        "path": "wf-video",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "vid-1-respond",
+      "name": "Respond Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [350, 180],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted' }) }}",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "vid-webhook-to-jobid",
+      "name": "Webhook Body to JobId",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [350, 420],
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst body = item.body || item;\nconst jobId = body.jobId || body.job_id || (item.body && (item.body.jobId || item.body.job_id));\nif (!jobId) return [];\nreturn [{ json: { result: jobId } }];"
+      }
+    },
+    {
+      "id": "vid-pause",
+      "name": "Check Paused",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [350, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "https://wealthy-hyena-4511.upstash.io/get/system:paused",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
+        }
+      }
+    },
+    {
+      "id": "vid-pause-if",
+      "name": "IF Not Paused",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [550, 300],
+      "parameters": {
+        "conditions": {
+          "string": [
+            { "value1": "={{ $json.result }}", "operation": "notEqual", "value2": "true" },
+            { "value1": "={{ $json.result }}", "operation": "notEqual", "value2": "1" }
+          ],
+          "combinator": "and"
+        }
       }
     },
     {
@@ -261,7 +317,7 @@
       "typeVersion": 2,
       "position": [2450, 400],
       "parameters": {
-        "jsCode": "const job = $('Decode Job').item.json;\nconst s1 = $('Submit Scene 1').item.json;\nconst s2 = $('Submit Scene 2').item.json;\nconst s3 = $('Submit Scene 3').item.json;\nconst s4 = $('Submit Scene 4').item.json;\nconst s5 = $('Submit Scene 5').item.json;\nconst vo = $('Submit Voice Job').item.json;\n\nconst pkg = {\n  job_id: job.jobId,\n  selectedTopic: job.selectedTopic || job.script?.title,\n  title: job.script?.title || job.selectedTopic,\n  genre: job.genre,\n  aspect_ratio: job.aspect_ratio,\n  duration: job.duration,\n  chatId: job.chatId,\n  narration: job.script?.full_narration,\n  scene_pred_ids: [\n    s1.data?.id || null,\n    s2.data?.id || null,\n    s3.data?.id || null,\n    s4.data?.id || null,\n    s5.data?.id || null\n  ],\n  voice_pred_id: vo.data?.id || null,\n  vstyle: job.vstyle,\n  nstyle: job.nstyle,\n  created_at: new Date().toISOString(),\n  poll_attempts: 0\n};\nreturn [{ json: pkg }];"
+        "jsCode": "const job = $('Decode Job').item.json;\nconst s1 = $('Submit Scene 1').item.json;\nconst s2 = $('Submit Scene 2').item.json;\nconst s3 = $('Submit Scene 3').item.json;\nconst s4 = $('Submit Scene 4').item.json;\nconst s5 = $('Submit Scene 5').item.json;\nconst vo = $('Submit Voice Job').item.json;\n\nconst pkg = {\n  job_id: job.jobId,\n  selectedTopic: job.selectedTopic || job.script?.title,\n  title: job.script?.title || job.selectedTopic,\n  genre: job.genre,\n  aspect_ratio: job.aspect_ratio,\n  duration: job.duration,\n  chatId: job.chatId,\n  narration: job.script?.full_narration,\n  scene_pred_ids: [\n    s1.data?.id || null,\n    s2.data?.id || null,\n    s3.data?.id || null,\n    s4.data?.id || null,\n    s5.data?.id || null\n  ],\n  voice_pred_id: vo.data?.id || null,\n  music_url: job.music_url || job.music || null,\n  vstyle: job.vstyle,\n  nstyle: job.nstyle,\n  created_at: new Date().toISOString(),\n  poll_attempts: 0\n};\nreturn [{ json: pkg }];"
       }
     },
     {
@@ -308,10 +364,35 @@
           "parameters": [{ "name": "Authorization", "value": "Bearer ARGfAAImcDE5NTI1MGEzYzhjMjQ0ZWM1YTFkYjY0ZmIxOTBhNmQ4YnAxNDUxMQ" }]
         }
       }
+    },
+    {
+      "id": "vid-trigger-asm",
+      "name": "Trigger WF-ASSEMBLE",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [3250, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL || 'https://n8n-production-2762.up.railway.app' }}/webhook/wf-assemble",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($('Build Render Package').item.json) }}",
+        "options": { "allowUnauthorizedCerts": true }
+      },
+      "continueOnFail": true
     }
   ],
   "connections": {
-    "Queue Poller": { "main": [[{ "node": "Check Time Window", "type": "main", "index": 0 }]] },
+    "WF-VIDEO Webhook": {
+      "main": [
+        [{ "node": "Respond Accepted", "type": "main", "index": 0 }],
+        [{ "node": "Webhook Body to JobId", "type": "main", "index": 0 }]
+      ]
+    },
+    "Webhook Body to JobId": { "main": [[{ "node": "IF Queue Not Empty", "type": "main", "index": 0 }]] },
+    "Check Paused": { "main": [[{ "node": "IF Not Paused", "type": "main", "index": 0 }]] },
+    "IF Not Paused": { "main": [[{ "node": "Check Time Window", "type": "main", "index": 0 }]] },
     "Check Time Window": { "main": [[{ "node": "GET Daily Count", "type": "main", "index": 0 }]] },
     "GET Daily Count": { "main": [[{ "node": "Evaluate Limits", "type": "main", "index": 0 }]] },
     "Evaluate Limits": { "main": [[{ "node": "IF OK to Generate", "type": "main", "index": 0 }]] },
@@ -338,7 +419,8 @@
     "Submit Voice Job": { "main": [[{ "node": "Build Render Package", "type": "main", "index": 0 }]] },
     "Build Render Package": { "main": [[{ "node": "Push to render_queue", "type": "main", "index": 0 }]] },
     "Push to render_queue": { "main": [[{ "node": "INCR Daily Count", "type": "main", "index": 0 }]] },
-    "INCR Daily Count": { "main": [[{ "node": "Set Count Expiry 24h", "type": "main", "index": 0 }]] }
+    "INCR Daily Count": { "main": [[{ "node": "Set Count Expiry 24h", "type": "main", "index": 0 }]] },
+    "Set Count Expiry 24h": { "main": [[{ "node": "Trigger WF-ASSEMBLE", "type": "main", "index": 0 }]] }
   },
   "active": false,
   "settings": { "executionOrder": "v1" },

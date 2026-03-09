@@ -95,6 +95,9 @@ class UpstashRedis:
 
     All methods return the `result` field from the Upstash response when
     available, or `None` on error.
+
+    Optional `prefix`: all key-based operations use prefix + key (e.g. prefix
+    "p2:" for Project 2 so keys are p2:script_queue, p2:job:xxx, etc.).
     """
 
     def __init__(
@@ -102,6 +105,7 @@ class UpstashRedis:
         redis_url: t.Optional[str] = None,
         redis_token: t.Optional[str] = None,
         config: t.Optional[dict] = None,
+        prefix: str = "",
     ) -> None:
         if not (redis_url and redis_token):
             config = config or _load_config()
@@ -109,16 +113,20 @@ class UpstashRedis:
 
         self._redis_url = redis_url.rstrip("/")
         self._redis_token = redis_token
+        self._prefix = prefix or ""
 
     # ── Low-level command helper ──────────────────────────────────────────
+
+    def _key(self, key: str) -> str:
+        """Return key with prefix if set (for key-based commands)."""
+        if not self._prefix:
+            return key
+        return self._prefix + key
 
     def command(self, *parts: t.Union[str, int, float]) -> t.Any:
         """
         Execute a raw Upstash Redis command.
-
-        Example:
-            command("SET", "key", "value")
-            command("LLEN", "script_queue")
+        Example: command("SET", "key", "value"). Key prefix is applied by get/set/rpush etc.
         """
         path_segments = [
             urllib.parse.quote(str(p), safe="") for p in parts
@@ -134,69 +142,73 @@ class UpstashRedis:
             },
         )
 
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                payload = json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            # The caller can decide how to surface/log this; for now return None.
-            _ = e.read()  # drain body
-            return None
-        except Exception:
-            return None
-
-        return payload.get("result", None)
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    payload = json.loads(resp.read())
+                return payload.get("result", None)
+            except urllib.error.HTTPError as e:
+                _ = e.read()
+                return None
+            except (OSError, TimeoutError, urllib.error.URLError):
+                if attempt == 0:
+                    continue
+                return None
+            except Exception:
+                return None
+        return None
 
     # ── High-level primitives used across KLIPORA ────────────────────────
 
     # Strings / JSON blobs
 
     def get(self, key: str) -> t.Optional[str]:
-        return self.command("GET", key)
+        return self.command("GET", self._key(key))
 
     def set(self, key: str, value: str) -> bool:
-        result = self.command("SET", key, value)
+        result = self.command("SET", self._key(key), value)
         return result == "OK"
 
     def delete(self, key: str) -> int:
-        result = self.command("DEL", key)
+        result = self.command("DEL", self._key(key))
         return int(result or 0)
 
     # Lists (queues)
 
     def lpush(self, key: str, *values: str) -> int:
-        result = self.command("LPUSH", key, *values)
+        result = self.command("LPUSH", self._key(key), *values)
         return int(result or 0)
 
     def rpush(self, key: str, *values: str) -> int:
-        result = self.command("RPUSH", key, *values)
+        result = self.command("RPUSH", self._key(key), *values)
         return int(result or 0)
 
     def lrange(self, key: str, start: int, end: int) -> t.List[str]:
-        result = self.command("LRANGE", key, start, end)
+        result = self.command("LRANGE", self._key(key), start, end)
         return list(result or [])
 
     def llen(self, key: str) -> int:
-        result = self.command("LLEN", key)
+        result = self.command("LLEN", self._key(key))
         return int(result or 0)
 
     def lpop(self, key: str) -> t.Optional[str]:
-        return self.command("LPOP", key)
+        return self.command("LPOP", self._key(key))
 
     def rpop(self, key: str) -> t.Optional[str]:
-        return self.command("RPOP", key)
+        return self.command("RPOP", self._key(key))
 
     # Sets (topic deduplication, tags)
 
     def sadd(self, key: str, *members: str) -> int:
-        result = self.command("SADD", key, *members)
+        result = self.command("SADD", self._key(key), *members)
         return int(result or 0)
 
     def sismember(self, key: str, member: str) -> bool:
-        result = self.command("SISMEMBER", key, member)
+        result = self.command("SISMEMBER", self._key(key), member)
         return bool(result)
 
     def smembers(self, key: str) -> t.List[str]:
-        result = self.command("SMEMBERS", key)
+        result = self.command("SMEMBERS", self._key(key))
         return list(result or [])
 
     # Convenience helpers for KLIPORA job objects
@@ -214,11 +226,11 @@ class UpstashRedis:
             return None
 
 
-def get_redis_client() -> UpstashRedis:
+def get_redis_client(prefix: str = "") -> UpstashRedis:
     """
-    Convenience factory for callers that do not need custom configuration.
+    Convenience factory. Use prefix="p2:" for Project 2 (same Upstash, keys p2:script_queue, etc.).
     """
-    return UpstashRedis()
+    return UpstashRedis(prefix=prefix)
 
 
 __all__ = [

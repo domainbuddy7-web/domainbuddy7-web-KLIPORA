@@ -72,25 +72,29 @@ class SystemGuardian:
     def detect_stalled_jobs(self) -> t.List[str]:
         """
         Identify jobs that have been stuck in queues longer than the
-        configured stall threshold.
-
-        Returns a list of job ids considered stalled.
+        configured stall threshold. Defensive: one bad job or Redis blip
+        does not break the rest.
         """
         stalled: t.List[str] = []
         now = self._utc_now()
         max_age = _dt.timedelta(minutes=self.QUEUE_STALL_MINUTES)
 
         for queue in ("script_queue", "render_queue", "publish_queue"):
-            job_ids = self.redis.lrange(queue, 0, -1)
+            try:
+                job_ids = self.redis.lrange(queue, 0, -1) or []
+            except Exception:
+                continue
             for job_id in job_ids:
-                job = self.controller.load_job(job_id)
-                if not job:
+                try:
+                    job = self.controller.load_job(job_id)
+                    if not job:
+                        continue
+                    ts = job.get("updated_at") or job.get("created_at")
+                    dt = self._parse_iso(ts) if isinstance(ts, str) else None
+                    if dt and (now - dt) > max_age:
+                        stalled.append(job_id)
+                except Exception:
                     continue
-                ts = job.get("updated_at") or job.get("created_at")
-                dt = self._parse_iso(ts) if isinstance(ts, str) else None
-                if dt and (now - dt) > max_age:
-                    stalled.append(job_id)
-
         return stalled
 
     def _safe_int(self, value: t.Any, default: int = 0) -> int:
@@ -134,6 +138,29 @@ class SystemGuardian:
         """
         return self.monitor.summarize_failures(limit=50)
 
+    def check_critical_health(self) -> dict:
+        """
+        Check Redis and n8n reachability. If any critical component fails,
+        set system:paused and return { "ok": False, "failed": ["redis"|"n8n"] }.
+        Policy: if any system fails, pause the entire pipeline.
+        """
+        failed: t.List[str] = []
+        try:
+            self.redis.get("system:paused")
+        except Exception:
+            failed.append("redis")
+        try:
+            self.monitor.list_workflows()
+        except Exception:
+            failed.append("n8n")
+        if failed:
+            try:
+                self.redis.set("system:paused", "1")
+            except Exception:
+                pass
+            return {"ok": False, "failed": failed}
+        return {"ok": True, "failed": []}
+
     # ── Policy application ────────────────────────────────────────────────
 
     def apply_policies(self) -> dict:
@@ -148,6 +175,12 @@ class SystemGuardian:
         stalled_jobs = self.detect_stalled_jobs()
 
         actions: t.List[str] = []
+
+        # Critical health: Redis or n8n down → pause pipeline
+        critical = self.check_critical_health()
+        if not critical.get("ok"):
+            self.redis.set("system:paused", "1")
+            actions.append(f"paused_system_critical_failure({critical.get('failed', [])})")
 
         # Too many recent failures across workflows
         total_failures = sum(failure_summary.values())

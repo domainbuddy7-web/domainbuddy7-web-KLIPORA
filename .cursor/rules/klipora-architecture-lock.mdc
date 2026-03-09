@@ -1,0 +1,25 @@
+---
+description: KLIPORA — Architecture is locked; docs are source of truth; Redis + n8n only
+alwaysApply: true
+---
+
+# KLIPORA: Architecture lock
+
+## Authoritative source of truth
+
+- **`docs/KLIPORA_SYSTEM_BRAIN.md`** — System architecture, Redis schema, automation flow, agents, key files.
+- **`docs/STRATEGIC_BRAIN.md`** — Strategic Brain layer and how it interacts with the system.
+
+These two files are the **authoritative source of truth**. No code or design may contradict them.
+
+## Before modifying any code
+
+1. **Verify alignment** — Confirm the change aligns with the architecture in those docs.
+2. **No new systems** — Do not introduce systems, components, or layers outside this architecture.
+3. **No local execution scripts** — Do not add or reintroduce scripts that run the pipeline locally (e.g. “run workflow” or “generate video” from CLI). Automation runs only via the defined interfaces (Mission Control API, n8n, Telegram).
+4. **Redis is the only memory** — All queues, job store, flags, topic/trend/finance/opportunity state live in Redis (Upstash). Do not add file-based or other memory systems for pipeline state.
+5. **n8n is the only automation execution layer** — WF-TREND, WF-GEN, WF-VIDEO, WF-ASSEMBLE (and P2 equivalents) are the automation engine. Do not add alternative workflow runners or execution layers.
+
+## Summary
+
+Read the two docs before architecture or pipeline changes. Redis = memory. n8n = automation. No local execution scripts. No new systems.

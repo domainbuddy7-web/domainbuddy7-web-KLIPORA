@@ -188,10 +188,11 @@ then SADD to mark it as used. Used topics are stored in the used_topics SET key.
 SECTION 8: LOCAL FILES (E:\KLIPORA on user's Windows machine)
 --------------------------------------------------------------------------------
 E:\KLIPORA\Infrastructure\config.json    — Master config with all API keys
-E:\KLIPORA\Datasets\used_topics.json     — Local backup of used topics (JSON array)
 E:\KLIPORA\Datasets\topic_dataset.json   — 250 topic seeds (same as WF-GEN)
-E:\KLIPORA\Automation\setup_redis.py     — Python script to re-initialize Redis keys
-E:\KLIPORA\Automation\used_topics_RESET.json — Empty array [] for resetting topics
+E:\KLIPORA\setup_redis.py                — Python script to re-initialize Redis keys (repo root)
+
+Topic memory: used_topics is Redis-only (key: used_topics SET). used_topics.json and
+used_topics_RESET.json were removed; do not reintroduce file-based topic memory.
 
 KLIPORA HQ folder (Claude's workspace):
 /KLIPORA HQ/workflows/WF-CTRL.json      — Latest WF-CTRL source (20 nodes)

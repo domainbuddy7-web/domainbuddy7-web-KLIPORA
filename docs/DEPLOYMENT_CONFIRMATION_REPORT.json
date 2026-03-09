@@ -1,0 +1,40 @@
+{
+  "workflow_activation": {
+    "WF-GEN": {
+      "active": false,
+      "error": "GET 401"
+    },
+    "WF-VIDEO": {
+      "active": false,
+      "error": "GET 401"
+    },
+    "WF-ASSEMBLE": {
+      "active": false,
+      "error": "GET 401"
+    }
+  },
+  "webhooks": {
+    "/webhook/wf-video": {
+      "status": 404,
+      "body": "{\"code\":404,\"message\":\"The requested webhook \\\"POST wf-video\\\" is not registered.\",\"hint\":\"The workflow must be active for a production URL to run successfully. You can activate the workflow using the",
+      "ok": false
+    },
+    "/webhook/wf-assemble": {
+      "status": 404,
+      "body": "{\"code\":404,\"message\":\"The requested webhook \\\"POST wf-assemble\\\" is not registered.\",\"hint\":\"The workflow must be active for a production URL to run successfully. You can activate the workflow using ",
+      "ok": false
+    }
+  },
+  "redis": {
+    "script_queue": 0,
+    "render_queue": 0
+  },
+  "e2e_trigger": {
+    "status": 200,
+    "body": "{\"message\":\"Workflow was started\"}"
+  },
+  "health_workflow": {
+    "error": "401 {\"status\":\"error\",\"message\":\"Unauthorized\"}"
+  },
+  "telegram": null
+}

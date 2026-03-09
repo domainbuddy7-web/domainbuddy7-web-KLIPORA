@@ -22,6 +22,7 @@ import typing as t
 
 import requests as _requests
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -31,21 +32,25 @@ from pydantic import BaseModel
 _config_ok = False
 _config_error = ""
 redis = None
+redis_p2 = None
 guardian = None
 controller = None
+controller_p2 = None
 monitor = None
 brain = None
 event_bus = None
 opportunity_engine = None
+finance_agent = None
 
 try:
     from Infrastructure.redis_client import get_redis_client
     from Command_Center.system_guardian import SystemGuardian
-    from Command_Center.workflow_controller import WorkflowController
+    from Command_Center.workflow_controller import WorkflowController, WorkflowTriggerError, TopicRejectedError
     from Command_Center.pipeline_monitor import PipelineMonitor
     from Command_Center.company_brain import CompanyBrain
     from Command_Center.event_bus import get_event_bus
     from Agents.opportunity_engine import OpportunityEngine
+    from Agents.finance_agent import FinanceAgent
 
     redis = get_redis_client()
     guardian = SystemGuardian(redis=redis)
@@ -54,12 +59,26 @@ try:
     brain = CompanyBrain(redis=redis)
     event_bus = get_event_bus()
     opportunity_engine = OpportunityEngine(redis=redis, event_bus=event_bus)
+    finance_agent = FinanceAgent(redis=redis)
+    finance_agent.ensure_initialized()
+    redis_p2 = get_redis_client(prefix="p2:")
+    controller_p2 = WorkflowController(
+        redis=redis_p2,
+        webhook_path_gen=os.environ.get("N8N_WEBHOOK_WF_GEN_P2", "/webhook/wf-gen-p2"),
+    )
     _config_ok = True
 except BaseException as e:
     _config_error = f"{type(e).__name__}: {e}"
 
 
-app = FastAPI(title="KLIPORA Mission Control API", version="0.1.0")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup: log; Shutdown: allow in-flight requests to finish (uvicorn handles SIGTERM)."""
+    yield
+    # Shutdown: optional cleanup (e.g. close pools) can go here
+
+
+app = FastAPI(title="KLIPORA Mission Control API", version="0.1.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,7 +103,7 @@ def _require_config():
 
 @app.middleware("http")
 async def require_config_middleware(request, call_next):
-    if request.url.path in ("/", "/health"):
+    if request.url.path in ("/", "/health", "/health/ready"):
         return await call_next(request)
     if not _config_ok:
         return JSONResponse(
@@ -180,14 +199,25 @@ class GenerateVideoRequest(BaseModel):
     duration: t.Optional[str] = None
     aspect_ratio: t.Optional[str] = None
     chat_id: t.Optional[str] = None
+    project_id: t.Optional[str] = None
 
 
 class RunExperimentRequest(BaseModel):
     experiment_id: str
 
 
+class TerminateExperimentRequest(BaseModel):
+    experiment_id: str = ""
+    index: int = -1
+
+
+class RunCycleRequest(BaseModel):
+    project_id: t.Optional[str] = None
+
+
 class JobIdRequest(BaseModel):
     job_id: str
+    project_id: t.Optional[str] = None
 
 
 class UpdateMetadataRequest(BaseModel):
@@ -423,6 +453,60 @@ def reject_opportunity_cmd(req: RejectOpportunityRequest) -> dict:
     return {"status": "ok", "opportunity": result}
 
 
+@app.post("/internal/notify-new-opportunity")
+def notify_new_opportunity() -> dict:
+    """
+    Send the latest pending opportunity to Telegram for approval.
+    Call this after registering an opportunity (e.g. from Opportunity Radar scanner).
+    """
+    opportunities = redis.get_json("opportunities:pending") or []
+    if not opportunities:
+        return {"status": "skipped", "reason": "no_pending"}
+    opp = opportunities[-1]
+    opp_id = opp.get("id", str(len(opportunities) - 1))
+    title = opp.get("title", "New opportunity")
+    demand = opp.get("market_signal", opp.get("demand", "—"))
+    cost = opp.get("estimated_cost", opp.get("cost", "?"))
+    revenue = opp.get("estimated_revenue", "—")
+    score = opp.get("score", "—")
+    text = (
+        f"📡 <b>NEW OPPORTUNITY</b>\n\n"
+        f"<b>{title}</b>\n\n"
+        f"<b>Demand / signal</b>\n{demand}\n\n"
+        f"<b>Score</b> {score}\n"
+        f"<b>Est. cost</b> ${cost}\n"
+        f"<b>Est. revenue</b> {revenue}\n\n"
+        "Approve or reject below."
+    )
+    # callback_data max 64 bytes; keep id short
+    cb_approve = f"approve_opp_{opp_id}"[:64]
+    cb_reject = f"reject_opp_{opp_id}"[:64]
+    reply_markup = {
+        "inline_keyboard": [
+            [{"text": "✅ Approve", "callback_data": cb_approve}, {"text": "❌ Reject", "callback_data": cb_reject}],
+        ]
+    }
+    ok = _send_telegram_with_markup(text, reply_markup)
+    return {"status": "sent" if ok else "send_failed", "opportunity_id": opp_id}
+
+
+def _send_telegram_with_markup(text: str, reply_markup: dict) -> bool:
+    """Send Telegram message with inline keyboard."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False
+    try:
+        r = _requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "reply_markup": reply_markup},
+            timeout=5,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
 # ── Notifications / Alerts ------------------------------------------------
 
 
@@ -478,6 +562,8 @@ def resume_system() -> dict:
 def generate_video(req: GenerateVideoRequest) -> dict:
     """
     Manually trigger a video generation job.
+    When project_id=p2, uses p2: Redis keys and WF-GEN-P2 webhook.
+    Returns 503 if n8n webhook is unreachable (job is marked failed and pushed to failed_queue).
     """
     if guardian.check_system_flags().get("paused"):
         raise HTTPException(
@@ -485,16 +571,34 @@ def generate_video(req: GenerateVideoRequest) -> dict:
             detail="System is paused; cannot generate video.",
         )
 
-    job = controller.start_generation_job(
-        topic=req.topic,
-        genre=req.genre,
-        visual_style=req.visual_style,
-        narration_style=req.narration_style,
-        duration=req.duration,
-        aspect_ratio=req.aspect_ratio,
-        chat_id=req.chat_id,
-    )
-    redis.rpush(
+    r, ctrl = _redis_for_project(req.project_id)
+    try:
+        job = ctrl.start_generation_job(
+            topic=req.topic,
+            genre=req.genre,
+            visual_style=req.visual_style,
+            narration_style=req.narration_style,
+            duration=req.duration,
+            aspect_ratio=req.aspect_ratio,
+            chat_id=req.chat_id,
+        )
+    except TopicRejectedError as e:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "accepted": False,
+                "reason": "topic_already_used",
+                "message": e.message,
+                "topic": e.topic,
+            },
+        )
+    except WorkflowTriggerError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"n8n webhook unreachable; job not started. {e!s}",
+        ) from e
+
+    r.rpush(
         "alerts:log",
         f"{_iso_now()} — Manual video job created: {job['id']} ({req.topic})",
     )
@@ -506,14 +610,20 @@ def generate_video(req: GenerateVideoRequest) -> dict:
     return {"job": job}
 
 
+MAX_ACTIVE_EXPERIMENTS = 3
+
+
 @app.post("/commands/run-experiment")
 def run_experiment(req: RunExperimentRequest) -> dict:
     """
-    Signal the system to run an experiment.
-
-    The Operations / CEO / Opportunity agents will watch this queue and
-    perform the actual orchestration.
+    Signal the system to run an experiment. Policy: max 3 active experiments.
     """
+    experiments = redis.get_json("experiments:active") or []
+    if len(experiments) >= MAX_ACTIVE_EXPERIMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Max {MAX_ACTIVE_EXPERIMENTS} active experiments. Terminate one first.",
+        )
     redis.rpush("commands:run_experiment", req.experiment_id)
     redis.rpush(
         "alerts:log",
@@ -527,10 +637,39 @@ def run_experiment(req: RunExperimentRequest) -> dict:
     return {"status": "queued", "experiment_id": req.experiment_id}
 
 
-def _get_pending_job(job_id: str) -> t.Optional[dict]:
+@app.post("/commands/terminate-experiment")
+def terminate_experiment(req: TerminateExperimentRequest) -> dict:
+    """Remove an experiment from experiments:active by id or index (0-based)."""
+    experiments = redis.get_json("experiments:active") or []
+    if req.index >= 0 and req.index < len(experiments):
+        removed = experiments.pop(req.index)
+        redis.set_json("experiments:active", experiments)
+        event_bus.publish("EXPERIMENT_TERMINATED", {"experiment": removed}, category="experiments")
+        return {"status": "ok", "removed": removed}
+    if req.experiment_id:
+        for i, ex in enumerate(experiments):
+            if ex.get("id") == req.experiment_id or ex.get("experiment_id") == req.experiment_id:
+                removed = experiments.pop(i)
+                redis.set_json("experiments:active", experiments)
+                event_bus.publish("EXPERIMENT_TERMINATED", {"experiment": removed}, category="experiments")
+                return {"status": "ok", "removed": removed}
+    raise HTTPException(status_code=404, detail="Experiment not found")
+
+
+def _redis_for_project(project_id: t.Optional[str] = None):
+    """Return redis and controller for project_id. Default (no project_id) = main (Project 1)."""
+    if project_id == "p2" and redis_p2 is not None and controller_p2 is not None:
+        return redis_p2, controller_p2
+    return redis, controller
+
+
+def _get_pending_job(job_id: str, r: t.Optional[t.Any] = None) -> t.Optional[dict]:
     """Load pending_approve:{job_id} from Redis. Handles JSON or URL-encoded JSON."""
     import urllib.parse
-    raw = redis.get(f"pending_approve:{job_id}")
+    r = r or redis
+    if r is None:
+        return None
+    raw = r.get(f"pending_approve:{job_id}")
     if not raw:
         return None
     s = raw if isinstance(raw, str) else (raw.decode("utf-8") if hasattr(raw, "decode") else str(raw))
@@ -542,13 +681,13 @@ def _get_pending_job(job_id: str) -> t.Optional[dict]:
     return None
 
 
-def _set_pending_job(job_id: str, job: dict) -> None:
+def _set_pending_job(job_id: str, job: dict, r: t.Optional[t.Any] = None) -> None:
     """Write pending_approve:{job_id}. Optional: set TTL 24h (86400) to auto-expire."""
-    redis.set_json(f"pending_approve:{job_id}", job)
+    (r or redis).set_json(f"pending_approve:{job_id}", job)
 
 
-def _del_pending_job(job_id: str) -> None:
-    redis.delete(f"pending_approve:{job_id}")
+def _del_pending_job(job_id: str, r: t.Optional[t.Any] = None) -> None:
+    (r or redis).delete(f"pending_approve:{job_id}")
 
 
 @app.post("/internal/daily-report")
@@ -591,14 +730,21 @@ def notify_preview(req: JobIdRequest) -> dict:
     """
     Human-in-the-loop: send preview to Telegram with Approve/Regenerate/Edit/Discard.
     Call this from n8n WF-ASSEMBLE after storing the job in Redis pending_approve:{job_id}.
-    Recommended: set TTL 86400 (24h) on pending_approve:{job_id} in n8n so unreviewed jobs expire.
+    When Project 2: n8n sends project_id=p2 in body; we read from p2:pending_approve:{job_id}.
+    Never raises: returns 200 with sent=False if Telegram fails so n8n does not get 500.
     """
-    job = _get_pending_job(req.job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="pending_approve:{job_id} not found")
-    job.setdefault("job_id", req.job_id)
-    ok = _send_telegram_review(req.job_id, job)
-    return {"sent": ok, "job_id": req.job_id}
+    try:
+        r, _ = _redis_for_project(req.project_id)
+        job = _get_pending_job(req.job_id, r=r)
+        if not job:
+            raise HTTPException(status_code=404, detail="pending_approve:{job_id} not found")
+        job.setdefault("job_id", req.job_id)
+        ok = _send_telegram_review(req.job_id, job)
+        return {"sent": ok, "job_id": req.job_id}
+    except HTTPException:
+        raise
+    except Exception:
+        return {"sent": False, "job_id": req.job_id, "error": "send_failed"}
 
 
 def _call_railway_render(job: dict) -> bool:
@@ -621,6 +767,9 @@ def _call_railway_render(job: dict) -> bool:
         "title": job.get("topic") or job.get("title", ""),
         "genre": job.get("genre", ""),
     }
+    music_url = job.get("music_url") or job.get("music")
+    if music_url:
+        payload["music"] = music_url
     try:
         r = _requests.post(f"{render_url}/render", json=payload, timeout=30)
         return r.ok
@@ -630,40 +779,65 @@ def _call_railway_render(job: dict) -> bool:
 
 @app.post("/commands/approve-publish")
 def approve_publish(req: JobIdRequest) -> dict:
-    """Approve video: call Railway Render (if job has clips), push to publish_queue, remove from pending review."""
-    job = _get_pending_job(req.job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found or already processed")
-    render_called = _call_railway_render(job)
-    redis.rpush("publish_queue", req.job_id)
-    controller.update_job_status(req.job_id, "publishing")
-    _del_pending_job(req.job_id)
-    event_bus.publish("VIDEO_APPROVED", {"job_id": req.job_id}, category="videos")
-    if render_called:
-        _send_telegram(f"✅ <b>VIDEO PUBLISHED</b>\nJob: {req.job_id}\nFFmpeg assembling; video will arrive in Telegram shortly.")
-    else:
-        _send_telegram(f"✅ <b>VIDEO QUEUED FOR PUBLISH</b>\nJob: {req.job_id}\nPlatform pipeline will upload when ready.")
-    return {"status": "ok", "job_id": req.job_id, "render_called": render_called}
+    """Approve video: call Railway Render (if job has clips), push to publish_queue, remove from pending. When project_id=p2 uses p2: Redis."""
+    try:
+        r, ctrl = _redis_for_project(req.project_id)
+        job = _get_pending_job(req.job_id, r=r)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found or already processed")
+        render_called = _call_railway_render(job)
+        r.rpush("publish_queue", req.job_id)
+        ctrl.update_job_status(req.job_id, "publishing")
+        _del_pending_job(req.job_id, r=r)
+        event_bus.publish("VIDEO_APPROVED", {"job_id": req.job_id}, category="videos")
+        if render_called:
+            try:
+                finance_agent.record_spend("api_usage", 0.5)
+            except Exception:
+                pass
+        if render_called:
+            _send_telegram(f"✅ <b>VIDEO PUBLISHED</b>\nJob: {req.job_id}\nFFmpeg assembling; video will arrive in Telegram shortly.")
+        else:
+            _send_telegram(f"✅ <b>VIDEO QUEUED FOR PUBLISH</b>\nJob: {req.job_id}\nPlatform pipeline will upload when ready.")
+        return {"status": "ok", "job_id": req.job_id, "render_called": render_called}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Approve failed: {type(e).__name__}: {e!s}") from e
 
 
 @app.post("/commands/regenerate-job")
 def regenerate_job(req: JobIdRequest) -> dict:
-    """Send job back to WF-GEN (same topic, new script/visuals). Removes from pending review."""
-    job = _get_pending_job(req.job_id)
+    """Send job back to WF-GEN (same topic, new script/visuals). Removes from pending. When project_id=p2 uses p2 Redis and WF-GEN-P2."""
+    r, ctrl = _redis_for_project(req.project_id)
+    job = _get_pending_job(req.job_id, r=r)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or already processed")
     topic = job.get("topic") or "General"
     meta = job.get("meta") or {}
-    controller.start_generation_job(
-        topic=topic,
-        genre=job.get("genre"),
-        visual_style=job.get("visual_style") or meta.get("visual_style"),
-        narration_style=job.get("narration_style") or meta.get("narration_style"),
-        duration=str(job.get("duration", "")) or meta.get("duration"),
-        aspect_ratio=job.get("aspect_ratio") or meta.get("aspect_ratio"),
-        job_id=None,
-    )
-    _del_pending_job(req.job_id)
+    try:
+        ctrl.start_generation_job(
+            topic=topic,
+            genre=job.get("genre"),
+            visual_style=job.get("visual_style") or meta.get("visual_style"),
+            narration_style=job.get("narration_style") or meta.get("narration_style"),
+            duration=str(job.get("duration", "")) or meta.get("duration"),
+            aspect_ratio=job.get("aspect_ratio") or meta.get("aspect_ratio"),
+            job_id=None,
+        )
+    except TopicRejectedError as e:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "accepted": False,
+                "reason": "topic_already_used",
+                "message": e.message,
+                "topic": e.topic,
+            },
+        )
+    except WorkflowTriggerError as e:
+        raise HTTPException(status_code=503, detail=f"n8n webhook unreachable: {e!s}") from e
+    _del_pending_job(req.job_id, r=r)
     event_bus.publish("VIDEO_REGENERATE", {"job_id": req.job_id, "topic": topic}, category="videos")
     _send_telegram(f"🔄 <b>Regenerating</b>\nTopic: {topic}\nNew job queued for script generation.")
     return {"status": "ok", "job_id": req.job_id}
@@ -671,82 +845,115 @@ def regenerate_job(req: JobIdRequest) -> dict:
 
 @app.post("/commands/discard-job")
 def discard_job(req: JobIdRequest) -> dict:
-    """Discard video: add topic to used_topics, remove from pending. Prevents topic reuse."""
-    job = _get_pending_job(req.job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found or already processed")
-    topic = job.get("topic") or ""
-    if topic:
-        redis.sadd("used_topics", topic)
-    _del_pending_job(req.job_id)
-    redis.rpush("failed_queue", req.job_id)
-    event_bus.publish("VIDEO_DISCARDED", {"job_id": req.job_id, "topic": topic}, category="videos")
-    _send_telegram(f"❌ <b>Discarded</b>\nJob: {req.job_id}\nTopic marked used.")
-    return {"status": "ok", "job_id": req.job_id}
+    """Discard video: add topic to used_topics, remove from pending. When project_id=p2 uses p2: Redis."""
+    try:
+        r, _ = _redis_for_project(req.project_id)
+        job = _get_pending_job(req.job_id, r=r)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found or already processed")
+        topic = job.get("topic") or ""
+        if topic:
+            r.sadd("used_topics", topic)
+        _del_pending_job(req.job_id, r=r)
+        r.rpush("failed_queue", req.job_id)
+        event_bus.publish("VIDEO_DISCARDED", {"job_id": req.job_id, "topic": topic}, category="videos")
+        _send_telegram(f"❌ <b>Discarded</b>\nJob: {req.job_id}\nTopic marked used.")
+        return {"status": "ok", "job_id": req.job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Discard failed: {type(e).__name__}: {e!s}") from e
 
 
 @app.patch("/commands/update-job-metadata")
 def update_job_metadata(req: UpdateMetadataRequest) -> dict:
     """Update title/description/hashtags for a pending job; then owner can Approve & Publish."""
-    job = _get_pending_job(req.job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found or already processed")
-    if req.title is not None:
-        job["title"] = req.title
-    if req.description is not None:
-        job["description"] = req.description
-    if req.hashtags is not None:
-        job["hashtags"] = req.hashtags
-    _set_pending_job(req.job_id, job)
-    return {"status": "ok", "job_id": req.job_id}
+    try:
+        job = _get_pending_job(req.job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found or already processed")
+        if req.title is not None:
+            job["title"] = req.title
+        if req.description is not None:
+            job["description"] = req.description
+        if req.hashtags is not None:
+            job["hashtags"] = req.hashtags
+        _set_pending_job(req.job_id, job)
+        return {"status": "ok", "job_id": req.job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Update metadata failed: {type(e).__name__}: {e!s}") from e
 
 
 @app.post("/commands/run-cycle")
-def run_orchestration_cycle() -> dict:
+def run_orchestration_cycle(req: RunCycleRequest = RunCycleRequest()) -> dict:
     """
     Run one KLIPORA orchestration cycle: CEO plan → CTO health check → Operations production.
-    Sends Telegram alerts for session start and stop when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set.
+    When project_id=p2 uses p2: Redis and WF-GEN-P2. Sends Telegram alerts when TELEGRAM_* are set.
+    Returns 503 if any agent step fails or if project_id=p2 but P2 is not configured.
     """
     from Agents.ceo_agent import CEOAgent
     from Agents.cto_agent import CTOAgent
     from Agents.operations_agent import OperationsAgent
 
+    use_p2 = req.project_id == "p2"
+    if use_p2 and (redis_p2 is None or controller_p2 is None):
+        raise HTTPException(
+            status_code=503,
+            detail="Project 2 not configured (N8N_WEBHOOK_WF_GEN_P2 and Redis required).",
+        )
+    r = redis_p2 if use_p2 else redis
+    ctrl = controller_p2 if use_p2 else controller
+    label = " (P2)" if use_p2 else ""
+
     now = _iso_now()
     _send_telegram(
-        f"🟢 <b>KLIPORA session started</b>\n"
+        f"🟢 <b>KLIPORA session started{label}</b>\n"
         f"Time: {now}\n"
         f"Cycle: CEO plan → CTO health → Operations production."
     )
 
-    ceo = CEOAgent(redis=redis, event_bus=event_bus)
-    cto = CTOAgent(redis=redis, event_bus=event_bus)
-    ops = OperationsAgent(redis=redis, event_bus=event_bus)
+    try:
+        ceo = CEOAgent(redis=r, event_bus=event_bus)
+        cto = CTOAgent(redis=r, event_bus=event_bus)
+        ops = OperationsAgent(redis=r, controller=ctrl, event_bus=event_bus)
 
-    ceo.align_daily_production_limit()
-    health_summary = cto.run_health_check()
-    production_result = ops.run_production_cycle()
+        ceo.align_daily_production_limit()
+        health_summary = cto.run_health_check()
+        production_result = ops.run_production_cycle()
 
-    event_bus.publish(
-        "ORCHESTRATION_CYCLE_COMPLETE",
-        {"health": health_summary, "production": production_result},
-        category="alerts",
-    )
+        event_bus.publish(
+            "ORCHESTRATION_CYCLE_COMPLETE",
+            {"health": health_summary, "production": production_result},
+            category="alerts",
+        )
 
-    status = production_result.get("status", "ok")
-    jobs = production_result.get("created_jobs", [])
-    summary = f"Status: {status}. Jobs created: {len(jobs)}."
-    _send_telegram(
-        f"🔴 <b>KLIPORA session finished</b>\n"
-        f"Time: {_iso_now()}\n"
-        f"{summary}\n"
-        f"Paused: {health_summary.get('flags', {}).get('paused', False)}"
-    )
+        status = production_result.get("status", "ok")
+        jobs = production_result.get("created_jobs", [])
+        summary = f"Status: {status}. Jobs created: {len(jobs)}."
+        _send_telegram(
+            f"🔴 <b>KLIPORA session finished{label}</b>\n"
+            f"Time: {_iso_now()}\n"
+            f"{summary}\n"
+            f"Paused: {health_summary.get('flags', {}).get('paused', False)}"
+        )
 
-    return {
-        "status": "ok",
-        "health": health_summary,
-        "production": production_result,
-    }
+        return {
+            "status": "ok",
+            "health": health_summary,
+            "production": production_result,
+        }
+    except Exception as e:
+        _send_telegram(
+            f"⚠️ <b>KLIPORA cycle failed</b>\n"
+            f"Time: {_iso_now()}\n"
+            f"Error: {type(e).__name__}: {e!s}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Orchestration cycle failed: {type(e).__name__}: {e!s}",
+        ) from e
 
 
 @app.get("/commands/system-diagnostics")
@@ -766,6 +973,18 @@ def system_diagnostics() -> dict:
         "n8n_failures": failures,
         "stalled_jobs": stalled,
     }
+
+
+@app.get("/health/ready")
+def health_ready():
+    """Readiness probe: 200 if Redis is reachable, 503 otherwise. For Railway/orchestrators."""
+    if not _config_ok or redis is None:
+        raise HTTPException(status_code=503, detail="Service not configured or Redis unavailable")
+    try:
+        redis.get("system:paused")
+        return {"ready": True}
+    except Exception:
+        raise HTTPException(status_code=503, detail="Redis unreachable")
 
 
 @app.get("/health")

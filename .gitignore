@@ -1,5 +1,6 @@
 # Secrets — never commit real keys
 Infrastructure/config.json
+.env
 
 # Python
 __pycache__/

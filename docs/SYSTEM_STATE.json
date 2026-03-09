@@ -1,0 +1,39 @@
+{
+  "project": "KLIPORA Autonomous Media Factory",
+  "architecture_locked": true,
+  "pipeline_status": "stable",
+  "workflow_pipeline": [
+    "WF-TREND",
+    "WF-GEN",
+    "WF-VIDEO",
+    "WF-ASSEMBLE"
+  ],
+  "browser_automation": {
+    "browserbase_enabled": true,
+    "allowed_targets": [
+      "n8n",
+      "Railway",
+      "Telegram",
+      "Monitoring dashboards"
+    ]
+  },
+  "redis_memory": [
+    "script_queue",
+    "render_queue",
+    "publish_queue",
+    "failed_queue",
+    "used_topics"
+  ],
+  "telegram_ui_refactor": {
+    "design_completed": true,
+    "folder_structure_created": true,
+    "diagnostics_service_extracted": true,
+    "api_service_extracted": false,
+    "redis_state_service_extracted": false,
+    "router_system_created": false,
+    "panel_modules_created": false
+  },
+  "current_phase": "telegram_ui_refactor",
+  "next_step": "extract_api_service",
+  "last_checkpoint": "2026-03-09"
+}
